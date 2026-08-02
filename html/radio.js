@@ -500,6 +500,80 @@
       var target_center = centerHz;
       var target_preset = "am";
       var target_zoom_level = 14;
+      // Optional startup controls from the page URL. `freq` is expressed in
+      // kHz (for example, ?freq=14200&mode=usb). These values take precedence
+      // over localStorage when the websocket is opened.
+      var urlControlOverrides = { frequencyHz: null, mode: null, audio: false };
+      var urlAudioStartAttempted = false;
+
+      function resumeUrlAudioAfterGesture() {
+        try { document.removeEventListener('pointerdown', resumeUrlAudioAfterGesture, true); } catch (e) {}
+        try { document.removeEventListener('keydown', resumeUrlAudioAfterGesture, true); } catch (e) {}
+        try {
+          if (player && player.audioCtx && player.audioCtx.state === 'suspended') {
+            player.audioCtx.resume().catch(function() {});
+          }
+        } catch (e) {}
+      }
+
+      function applyUrlControlParameters() {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const freqParam = params.get('freq');
+          const modeParam = params.get('mode');
+          const audioParam = params.get('audio');
+
+          if (freqParam !== null && freqParam.trim() !== '') {
+            const frequencyKHz = Number(freqParam);
+            const requestedHz = frequencyKHz * 1000.0;
+            // The hardware sample rate is learned from the backend only after
+            // the websocket opens, so checkFrequencyIsValid() cannot be used
+            // during URL startup. Keep the value within the uint32 range used
+            // by the server and let normal backend status enforce its actual
+            // tuning limits once connected.
+            if (Number.isFinite(requestedHz) && requestedHz >= 0 &&
+                requestedHz <= 0xFFFFFFFF && spectrum) {
+              urlControlOverrides.frequencyHz = requestedHz;
+              frequencyHz = requestedHz;
+              target_frequency = requestedHz;
+              centerHz = requestedHz;
+              target_center = requestedHz;
+              spectrum.setFrequency(requestedHz);
+              try { spectrum.setCenterHz(requestedHz); } catch (e) {
+                spectrum.centerHz = requestedHz;
+              }
+              const freqEl = document.getElementById('freq');
+              if (freqEl) freqEl.value = (requestedHz / 1000.0).toFixed(3);
+            } else {
+              console.warn('[radio.js] Ignoring invalid URL frequency (kHz):', freqParam);
+            }
+          }
+
+          if (modeParam !== null && modeParam.trim() !== '') {
+            const requestedMode = modeParam.trim().toLowerCase();
+            const modeEl = document.getElementById('mode');
+            const validMode = modeEl && Array.from(modeEl.options).some(function(option) {
+              return option.value.toLowerCase() === requestedMode && !option.disabled;
+            });
+            if (validMode) {
+              urlControlOverrides.mode = requestedMode;
+              target_preset = requestedMode;
+              modeEl.value = requestedMode;
+            } else {
+              console.warn('[radio.js] Ignoring invalid URL mode:', modeParam);
+            }
+          }
+
+          if (audioParam !== null) {
+            const requestedAudio = audioParam.trim().toLowerCase();
+            urlControlOverrides.audio = requestedAudio === '1' ||
+              requestedAudio === 'true' || requestedAudio === 'yes' ||
+              requestedAudio === 'on' || requestedAudio === 'start';
+          }
+        } catch (e) {
+          console.warn('[radio.js] Failed to apply URL control parameters:', e);
+        }
+      }
       var switchModesByFrequency = false;
       // If the user manually types or clicks Set, avoid automatic mode switching
       let userTypedFreq = false;
@@ -690,9 +764,9 @@ function applyQuickBW() {
           const freqEl = document.getElementById('freq');
           const zoomEl = document.getElementById('zoom_level');
           const _savedPreset = window.localStorage ? localStorage.getItem('preset') : null;
-          const modeToSend = _savedPreset || (modeEl && modeEl.value) || target_preset || 'am';
+          const modeToSend = urlControlOverrides.mode || _savedPreset || (modeEl && modeEl.value) || target_preset || 'am';
           // Also restore the DOM to the saved preset now so subsequent reconnect reads are correct
-          if (_savedPreset && modeEl && modeEl.value !== _savedPreset) { modeEl.value = _savedPreset; }
+          if (!urlControlOverrides.mode && _savedPreset && modeEl && modeEl.value !== _savedPreset) { modeEl.value = _savedPreset; }
           const freqToSend = (freqEl && freqEl.value) ? parseFloat(freqEl.value) : (target_frequency/1000.0);
           const zoomToSend = (zoomEl && zoomEl.value) ? zoomEl.value : (target_zoom_level || 6);
           try { sendControl('mode', 'M:' + modeToSend, undefined, true); } catch (e) { console.warn('Immediate mode send failed', e); }
@@ -1205,6 +1279,25 @@ function applyQuickBW() {
           } catch (e) {}
           if(args[0]=='S') { // get our ssrc
             ssrc=parseInt(args[1]);
+            // Wait until the startup mode/frequency messages have been sent,
+            // then start audio for URLs containing audio=1. The AudioContext
+            // resume is best-effort; browser autoplay policy may defer sound
+            // until the first click/key press, so install a gesture fallback.
+            if (urlControlOverrides.audio && !urlAudioStartAttempted && Number.isFinite(ssrc)) {
+              urlAudioStartAttempted = true;
+              setTimeout(async function() {
+                try {
+                  const btn = document.getElementById('audio_button');
+                  if (btn && btn.value === 'START') await audio_start_stop();
+                  if (player && player.audioCtx && player.audioCtx.state === 'suspended') {
+                    document.addEventListener('pointerdown', resumeUrlAudioAfterGesture, { once: true, capture: true });
+                    document.addEventListener('keydown', resumeUrlAudioAfterGesture, { once: true, capture: true });
+                  }
+                } catch (e) {
+                  console.warn('[radio.js] URL audio auto-start failed:', e);
+                }
+              }, 400);
+            }
           }
           // BFREQ: server-sent backend frequency in kHz (e.g., "BFREQ:10000.000")
           // BFREQ_FORCE: server-forced backend frequency update (UI should always apply)
@@ -1357,7 +1450,7 @@ function applyQuickBW() {
                   // adoptEnabled() (shiftHz > 1) can cause plain M: updates to overwrite the UI.
                   if (Date.now() < suppressProgrammaticUpdatesUntil) {
                     try {
-                      const storedMode = window.localStorage ? localStorage.getItem('preset') : null;
+                      const storedMode = urlControlOverrides.mode || (window.localStorage ? localStorage.getItem('preset') : null);
                       if (storedMode && storedMode !== modeVal) {
                         console.info('[radio.js] server mode conflicts with stored mode during reconnect window; will re-assert', storedMode, 'in 500ms');
                         setTimeout(() => {
@@ -1958,6 +2051,9 @@ function applyQuickBW() {
               setDefaultSettings(true);
             }
           } catch (e) { console.warn('loadSettings failed', e); }
+          // URL controls deliberately apply after saved settings so a shared
+          // link can select the active browser session's frequency and mode.
+          applyUrlControlParameters();
           // Run a diagnostic to surface any missing saved keys (alerts the user)
           try { diagnosticCheckSettings(true); } catch (e) { /* ignore */ }
 

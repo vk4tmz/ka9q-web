@@ -108,6 +108,58 @@ ka9q-web
 
 Finally open a browser and connect locally to http://localhost:8081 , or from a remote browser to http://<your computer name/IP>:8081
 
+### URL startup arguments
+
+The receiver can be tuned when the page opens by adding query arguments to
+either `/` or `/radio.html`:
+
+| Argument | Value | Example | Description |
+| --- | --- | --- | --- |
+| `freq` | Frequency in **kHz** | `freq=612.000` | Sets the receiver frequency. Decimal values are accepted. |
+| `mode` | Preset name | `mode=am` | Sets the mode. The name is case-insensitive and must be available in the mode selector. |
+| `audio` | `1`, `true`, `yes`, `on`, or `start` | `audio=1` | Starts the audio stream after the WebSocket session is ready. |
+
+For example, start on 612 kHz in AM mode with audio enabled:
+
+```
+http://localhost:8081/?freq=612.000&mode=am&audio=1
+```
+
+Or start on 14.2 MHz in USB mode:
+
+```
+http://localhost:8081/radio.html?freq=14200.000&mode=usb&audio=1
+```
+
+Each argument is optional. URL values override saved browser frequency and mode
+settings for that page's active WebSocket session.
+
+#### Allowing automatic audio playback
+
+Browsers commonly block audio until the user interacts with the page. In that
+case, `audio=1` starts the server-side audio stream but the browser may leave its
+local audio context suspended.
+
+On Firefox, including the Firefox builds commonly supplied with Linux Mint:
+
+1. Enter `about:config` in the Firefox address bar.
+2. Accept the warning.
+3. Search for `media.autoplay.default`.
+4. Change its value to `0` (`0` allows autoplay).
+5. Close the ka9q-web tab and open the URL again.
+
+The commonly used values are `0` to allow autoplay, `1` to block audible
+autoplay, and `5` to block all autoplay. This preference is global and affects
+all websites. To restore Firefox's default later, use the reset button beside
+`media.autoplay.default` in `about:config`.
+
+On Chromium/Chrome in a dedicated or kiosk environment, it can be launched with:
+
+```
+chromium --autoplay-policy=no-user-gesture-required \
+  'http://localhost:8081/?freq=612.000&mode=am&audio=1'
+```
+
 NOTE: to start ka9q-web on a different ka9q-radio control address, the command line option is '-m', for instance:
 ```
 ka9q-web -m hf.local

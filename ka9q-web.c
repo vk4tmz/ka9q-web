@@ -1697,6 +1697,7 @@ onion_connection_status home(void *data, onion_request * req,
         "  <title>G0ORX Web SDR</title>"
         "  <meta charset=\"UTF-8\" />"
         "  <meta http-equiv=\"refresh\" content=\"0; URL=radio.html\" />"
+        "  <script>location.replace('radio.html'+location.search+location.hash);</script>"
         "</head>"
         "<body>"
         "</body>"
@@ -3935,5 +3936,4 @@ static void process_status_packet(struct session *sp, uint8_t *buffer, int rx_le
   int size = (uint8_t *)bp - output_buffer;
   send_ws_binary_to_session(sp, output_buffer, size);
 }
-
 
