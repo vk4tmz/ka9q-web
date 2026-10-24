@@ -2083,20 +2083,20 @@ function sendFilter2(idx) {
                     if (l >= 1) spectrum.frontendIsReal = !!view.getUint8(i);
                     i += l;
                     break;
-                  case 48: // DEMOD_TYPE
-                    if (l > 0) {
+                  case 48: // DEMOD_TYPE (KA9Q zero-length integer is valid mode 0)
+                    if (l >= 0 && l <= 4) {
                       let x = 0;
                       for (let k = 0; k < l; k++) x = x * 256 + view.getUint8(i + k);
                       sqDemodType = x;
                     }
                     i += l;
                     break;
-                  case 83: // SQUELCH_OPEN (dB SNR)
-                    if (l >= 4) sqOpenDb = view.getFloat32(i, false);
+                  case 83: // SQUELCH_OPEN (KA9Q compressed float32, including +0 as len 0)
+                    sqOpenDb = window.Ka9qFmSquelch.decodeStatusFloat(view, i, l);
                     i += l;
                     break;
-                  case 84: // SQUELCH_CLOSE (dB SNR)
-                    if (l >= 4) sqCloseDb = view.getFloat32(i, false);
+                  case 84: // SQUELCH_CLOSE (KA9Q compressed float32, including +0 as len 0)
+                    sqCloseDb = window.Ka9qFmSquelch.decodeStatusFloat(view, i, l);
                     i += l;
                     break;
                   case 104: // AD_OVER (variable-length big-endian uint64)
