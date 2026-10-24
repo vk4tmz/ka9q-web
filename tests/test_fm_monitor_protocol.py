@@ -17,11 +17,11 @@ class MonitorProtocolTests(unittest.TestCase):
         self.assertTrue(math.isfinite(db))
         self.assertEqual(struct.unpack("f", struct.pack("f", power))[0], 0.0)
 
-    def test_normal_open_threshold_allows_zero_db_not_negative(self):
+    def test_normal_open_threshold_allows_negative_db_to_minus_30(self):
         server = (ROOT / "ka9q-web.c").read_text()
         html = (ROOT / "html" / "radio.html").read_text()
-        self.assertIn('open_db < 0.0 || open_db > 40', server)
-        self.assertIn('id="fmSqOpen" type="number" min="0"', html)
+        self.assertIn('open_db < -30 || open_db > 40', server)
+        self.assertIn('id="fmSqOpen" type="number" min="-30"', html)
 
     def test_monitor_command_accepts_websocket_sequence(self):
         server = (ROOT / "ka9q-web.c").read_text()
