@@ -38,14 +38,14 @@
   function valid(x) {
     return [x.open,x.close,x.hysteresis].every(Number.isFinite) &&
       [x.open,x.close,x.hysteresis].every(v => Math.abs(v*10-Math.round(v*10))<0.00001) &&
-      x.open>=0.1 && x.open<=40 && x.close>=-30 &&
+      x.open>=0 && x.open<=40 && x.close>=-30 &&
       x.close<=40 && x.close<=x.open &&
       x.hysteresis>=0 && x.hysteresis<=30 &&
       Math.abs(x.hysteresis-(x.open-x.close))<0.11;
   }
   function values() {
     // Validate exactly what was typed, not a rounded value that could turn
-    // 0.05 into an implicitly accepted +0.1 dB.
+    // 0.05 into an implicitly accepted +0.1 dB; zero itself is valid.
     const get = id => {
       const v = $(id).value.trim();
       return v === '' ? NaN : Number(v);
@@ -77,8 +77,8 @@
     if(visible && !backendFm())message('Waiting for FM demodulator status');
   }
   function invalidMessage(x) {
-    if (Number.isFinite(x.open) && x.open < 0.1)
-      return 'Open must be at least 0.1 dB. Use Monitor for squelch OFF.';
+    if (Number.isFinite(x.open) && x.open < 0)
+      return 'Open must be at least 0.0 dB. Use Monitor for squelch OFF.';
     return 'Invalid squelch threshold combination';
   }
   function edit(changed) {
