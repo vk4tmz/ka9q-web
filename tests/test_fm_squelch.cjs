@@ -111,7 +111,7 @@ test('negative Open -3.0 dB and -30.0 boundary confirm as normal squelch',()=>{
   nodes.fmSqOpen.value='-30.1';
   nodes.fmSqOpen.fire('input');
   assert.equal(nodes.fmSqApply.disabled,true);
-  assert.match(nodes.fmSqStatus.textContent,/at least -30\\.0 dB/);
+  assert.match(nodes.fmSqStatus.textContent,/at least -30\.0 dB/);
   nodes.fmSqApply.fire('click');
   assert.equal(commands.length,0);
 
@@ -120,7 +120,7 @@ test('negative Open -3.0 dB and -30.0 boundary confirm as normal squelch',()=>{
   assert.equal(nodes.fmSqClose.value,'-7');
   assert.equal(nodes.fmSqApply.disabled,false);
   nodes.fmSqApply.fire('click');
-  assert.match(commands[0][1],/^Q:-3\\.0:-7\\.0:/);
+  assert.match(commands[0][1],/^Q:-3\.0:-7\.0:/);
   ui.onStatus(1,-3,-7);
   assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
   assert.equal(nodes.fmSqMonitor.checked,false);
@@ -133,7 +133,7 @@ test('negative Open -3.0 dB and -30.0 boundary confirm as normal squelch',()=>{
   assert.equal(nodes.fmSqClose.value,'-30');
   assert.equal(nodes.fmSqApply.disabled,false);
   nodes.fmSqApply.fire('click');
-  assert.match(commands[1][1],/^Q:-30\\.0:-30\\.0:/);
+  assert.match(commands[1][1],/^Q:-30\.0:-30\.0:/);
   ui.onStatus(1,-30,-30);
   assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
   assert.equal(nodes.fmSqMonitor.checked,false);
@@ -148,7 +148,7 @@ test('Monitor restores last negative normal Open and Close values',()=>{
   assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
   nodes.fmSqMonitor.checked=false;
   nodes.fmSqMonitor.fire('change');
-  assert.match(commands[1][1],/^Q:-3\\.0:-7\\.0:/);
+  assert.match(commands[1][1],/^Q:-3\.0:-7\.0:/);
   ui.onStatus(1,-3,-7);
   assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
   assert.equal(nodes.fmSqMonitor.checked,false);
