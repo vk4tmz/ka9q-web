@@ -130,11 +130,11 @@
                           <strong>FM Squelch (dB SNR)</strong>
                           <div style="display:flex; flex-wrap:wrap; gap:5px; align-items:center; margin-top:3px;">
                             <label for="fmSqOpen">Open</label>
-                            <input id="fmSqOpen" type="number" min="0" max="40" step="0.5" style="width:5.5ch;" title="Signal SNR needed to open squelch" />
+                            <input id="fmSqOpen" type="number" min="0.1" max="40" step="0.1" style="width:5.5ch;" title="Minimum 0.1 dB SNR. For always-open audio use Monitor." />
                             <label for="fmSqClose">Close</label>
-                            <input id="fmSqClose" type="number" min="-30" max="40" step="0.5" style="width:5.5ch;" title="SNR below which squelch begins closing" />
+                            <input id="fmSqClose" type="number" min="-30" max="40" step="0.1" style="width:5.5ch;" title="SNR below which squelch begins closing" />
                             <label for="fmSqHysteresis">Hysteresis</label>
-                            <input id="fmSqHysteresis" type="number" min="0" max="30" step="0.5" style="width:5.5ch;" title="Open threshold minus close threshold; changing this adjusts Close" />
+                            <input id="fmSqHysteresis" type="number" min="0" max="30" step="0.1" style="width:5.5ch;" title="Open threshold minus close threshold; changing this adjusts Close" />
                             <button id="fmSqApply" type="button" disabled>Apply</button>
                           </div>
                           <div style="margin-top:5px;">

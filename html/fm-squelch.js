@@ -20,13 +20,21 @@
   }
   function valid(x) {
     return [x.open,x.close,x.hysteresis].every(Number.isFinite) &&
-      x.open>=0 && x.open<=40 && x.close>=-30 &&
+      [x.open,x.close,x.hysteresis].every(v => Math.abs(v*10-Math.round(v*10))<0.00001) &&
+      x.open>=0.1 && x.open<=40 && x.close>=-30 &&
       x.close<=40 && x.close<=x.open &&
       x.hysteresis>=0 && x.hysteresis<=30 &&
       Math.abs(x.hysteresis-(x.open-x.close))<0.11;
   }
   function values() {
-    return calculate($('fmSqOpen').value,$('fmSqClose').value,$('fmSqHysteresis').value,'');
+    // Validate exactly what was typed, not a rounded value that could turn
+    // 0.05 into an implicitly accepted +0.1 dB.
+    const get = id => {
+      const v = $(id).value.trim();
+      return v === '' ? NaN : Number(v);
+    };
+    return {open:get('fmSqOpen'),close:get('fmSqClose'),
+            hysteresis:get('fmSqHysteresis')};
   }
   function writeValues(x) {
     $('fmSqOpen').value=x.open.toFixed(1);
@@ -51,6 +59,11 @@
     btn.disabled=!ready || displayedMonitor || !!state.pending || !state.dirty || !valid(values());
     if(visible && !backendFm())message('Waiting for FM demodulator status');
   }
+  function invalidMessage(x) {
+    if (Number.isFinite(x.open) && x.open < 0.1)
+      return 'Open must be at least 0.1 dB. Use Monitor for squelch OFF.';
+    return 'Invalid squelch threshold combination';
+  }
   function edit(changed) {
     if(state.pending || state.actual?.monitor)return;
     const result=calculate($('fmSqOpen').value,$('fmSqClose').value,
@@ -59,7 +72,7 @@
     if(changed!=='close')$('fmSqClose').value=String(result.close);
     if(changed!=='hysteresis')$('fmSqHysteresis').value=String(result.hysteresis);
     state.dirty=true;
-    message(valid(result)?'Edited — press Apply':'Invalid squelch threshold combination');
+    message(valid(result)?'Edited — press Apply':invalidMessage(result));
     refreshMode();
   }
   function issue(messageText,want) {
@@ -87,7 +100,8 @@
   function apply() {
     const x=values();
     if(!valid(x) || !fmSelected() || !backendFm() || !state.actual || state.pending || state.actual.monitor) {
-      message('Cannot apply: check mode, backend status and threshold values');return;
+      message(!valid(x) ? invalidMessage(x) :
+              'Cannot apply: check mode, backend status and threshold values');return;
     }
     issue('Q:'+x.open.toFixed(1)+':'+x.close.toFixed(1),
           {monitor:false,open:x.open,close:x.close});

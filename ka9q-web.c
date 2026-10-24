@@ -963,10 +963,10 @@ static onion_connection_status handle_ws_message(struct session *sp, char *tmp) 
           } else if (!open_text || !close_text || end_open == open_text ||
                      end_close == close_text || *end_open != '\0' || *end_close != '\0' ||
                      !isfinite(open_db) || !isfinite(close_db) ||
-                     open_db < 0 || open_db > 40 ||
+                     open_db < 0.1 || open_db > 40 ||
                      close_db < -30 || close_db > 40 ||
                      close_db > open_db || open_db - close_db > 30) {
-            send_ws_text_to_session(sp, "SQERR:Invalid squelch thresholds");
+            send_ws_text_to_session(sp, "SQERR:Invalid squelch thresholds (Open min 0.1 dB; use Monitor for OFF)");
           } else {
             control_set_squelch(sp, (float)open_db, (float)close_db);
           }

@@ -238,3 +238,9 @@ When Monitor is disabled, the last received normal Open/Close values are
 restored. The UI times out after 8 seconds if there is no matching receiver
 status, instead of waiting indefinitely. The server logs per-session squelch
 commands for diagnostics. No RX888 RF gains or AIS session settings change.
+
+**Normal FM squelch minimum:** Open must be at least **+0.1 dB SNR**.
+The receiver did not reliably confirm a normal 0.0 dB setting in live tests,
+while +0.1 dB / −3.9 dB (4 dB hysteresis) confirmed correctly. The browser
+and server therefore reject Open=0.0 for normal squelch. Use the separate
+**Monitor** control for always-open noise/audio instead of setting Open to zero.
