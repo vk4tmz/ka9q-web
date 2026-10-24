@@ -524,6 +524,42 @@
       var urlControlOverrides = { frequencyHz: null, mode: null, audio: false };
       var urlAudioStartAttempted = false;
 
+      // Wait for FIRST_LO_FREQUENCY and usable IF edges before startup tuning.
+      // Sending the old 10 MHz HF default immediately overrides a VHF default.
+      let startupFrequencyPending = false;
+      let startupRequestedHz = null;
+      let startupFrequencyEpoch = 0;
+      function resolveStartupFrequencyFromFrontend() {
+        if (!startupFrequencyPending || !spectrum || !window.Ka9qStartupFrequency ||
+            !ws || ws.readyState !== WebSocket.OPEN) return;
+        const chosen = window.Ka9qStartupFrequency.choose(
+          startupRequestedHz, backendFrequencyHz, spectrum.frontendLoHz,
+          spectrum.frontendLowIfHz, spectrum.frontendHighIfHz);
+        if (!chosen) return;
+        startupFrequencyPending = false;
+        const epoch = startupFrequencyEpoch;
+        const hz = chosen.frequencyHz, khz = (hz / 1000).toFixed(3);
+        console.info('[radio.js] startup frequency', hz, 'Hz via', chosen.source);
+        target_frequency = hz;
+        frequencyHz = hz;
+        const input = document.getElementById('freq');
+        if (input) input.value = khz;
+        spectrum.setFrequency(hz);
+        if (!Number.isFinite(spectrum.centerHz) ||
+            spectrum.centerHz < chosen.lowHz ||
+            spectrum.centerHz > chosen.highHz)
+          spectrum.setCenterHz((chosen.lowHz + chosen.highHz) / 2);
+        try { saveSettings(); } catch (e) {}
+        const active = () => epoch === startupFrequencyEpoch &&
+                             ws && ws.readyState === WebSocket.OPEN;
+        const zoomEl = document.getElementById('zoom_level');
+        const zoom = zoomEl && zoomEl.value ? zoomEl.value : (target_zoom_level || 6);
+        setTimeout(() => { if (active()) sendControl('zoom', 'Z:' + String(zoom), undefined, true); }, 40);
+        setTimeout(() => { if (active()) sendControl('zoom_center', 'Z:c:' + khz, undefined, true); }, 100);
+        setTimeout(() => { if (active()) sendControl('freq', 'F:' + khz, undefined, true); }, 160);
+      }
+
+
       function resumeUrlAudioAfterGesture() {
         try { document.removeEventListener('pointerdown', resumeUrlAudioAfterGesture, true); } catch (e) {}
         try { document.removeEventListener('keydown', resumeUrlAudioAfterGesture, true); } catch (e) {}
@@ -950,6 +986,23 @@ function sendFilter2(idx) {
 
       function on_ws_open() {
         try { window.Ka9qFmSquelch.reset(); } catch (e) {}
+        startupFrequencyEpoch++;
+        startupFrequencyPending = true;
+        // Capture the browser's requested frequency before backend status can
+        // replace it. URL ?freq has priority over saved browser tuning.
+        const input = document.getElementById('freq');
+        const tuneKhz = input ? Number(input.value) : NaN;
+        startupRequestedHz = Number.isFinite(urlControlOverrides.frequencyHz)
+          ? urlControlOverrides.frequencyHz
+          : (Number.isFinite(tuneKhz) && tuneKhz > 0
+             ? Math.round(tuneKhz * 1000) : target_frequency);
+        backendFrequencyHz = 0;
+        // Require frontend limits from this websocket, not stale cached values.
+        if (spectrum) {
+          spectrum.frontendLoHz = NaN;
+          spectrum.frontendLowIfHz = NaN;
+          spectrum.frontendHighIfHz = NaN;
+        }
           // Prevent server-driven programmatic UI writes for a short window
           // while we force-send stored settings so the UI doesn't flash defaults.
           try { blockProgrammaticUpdates(1500); } catch (e) {}
@@ -987,23 +1040,14 @@ function sendFilter2(idx) {
         updateCWMarker();
         // Stagger remaining initial control messages slightly to avoid overwhelming backend
         // Force these reconnect-sends to bypass programmatic suppression so backend receives them
-        // Stagger reconnect sends: zoom, optional center, then frequency
-        try {
-          const zoomEl = document.getElementById('zoom_level');
-          const freqEl = document.getElementById('freq');
-          const zoomVal = (zoomEl && zoomEl.value) ? zoomEl.value : (target_zoom_level || 6);
-          const freqVal = (freqEl && freqEl.value) ? parseFloat(freqEl.value) : (target_frequency/1000.0);
-          setTimeout(() => { try { sendControl('zoom','Z:' + String(zoomVal), undefined, true); } catch (e) {} }, 60);
-          setTimeout(() => { try { if (!isNaN(freqVal)) sendControl('zoom_center','Z:c:' + (Number(freqVal)).toFixed(3), undefined, true); } catch (e) {} }, 120);
-          setTimeout(() => { try { if (!isNaN(freqVal)) sendControl('freq','F:' + (Number(freqVal) / 1.0).toFixed(3), undefined, true); } catch (e) {} }, 180);
-        } catch (e) {}
+        // Frequency and zoom sent after valid LO/IF status arrives.
         // Resend tuned frequency and, if audio was running prior to reconnect,
         // perform a short stop/start to force the backend audio channel to
         // match the UI-displayed tuned frequency.
         try {
           setTimeout(() => {
             try {
-              if (ws && ws.readyState === WebSocket.OPEN) {
+              if (ws && ws.readyState === WebSocket.OPEN && !startupFrequencyPending) {
                 // Bypass programmatic-UI guard on these reconnect sends
                 try { const freqEl = document.getElementById('freq'); const freqVal = (freqEl && freqEl.value) ? parseFloat(freqEl.value) : (target_frequency/1000.0); if (!isNaN(freqVal)) sendControl('freq','F:' + (Number(freqVal) / 1.0).toFixed(3), undefined, true); } catch (e) {}
                 try { const freqEl2 = document.getElementById('freq'); const freqVal2 = (freqEl2 && freqEl2.value) ? parseFloat(freqEl2.value) : (target_frequency/1000.0); if (!isNaN(freqVal2)) sendControl('zoom_center','Z:c:' + (Number(freqVal2)).toFixed(3), undefined, true); } catch (e) {}
@@ -1521,6 +1565,7 @@ function sendFilter2(idx) {
               // heuristic here previously misinterpreted sub-1MHz Hz values as kHz.
               const hz = Math.round(f_raw);
               backendFrequencyHz = hz;
+              if (startupFrequencyPending) return;
               try {
                 const freqEl = document.getElementById('freq');
                 if (freqEl) {
@@ -1828,7 +1873,7 @@ function sendFilter2(idx) {
               if (!spectrum._leftDragging) {
                 spectrum.setCenterHz(centerHz);
               }
-              if (adoptEnabled()) {
+              if (adoptEnabled() && !startupFrequencyPending) {
                 spectrum.setFrequency(frequencyHz);
               } else {
                 // console.debug('[radio.js] adopt disabled; skipping server-driven tuned frequency marker update');
@@ -1869,8 +1914,8 @@ function sendFilter2(idx) {
                 if (freqEl) {
                   // console.debug('[radio.js] spectrum update -> frequencyHz (Hz)=', frequencyHz);
                   backendFrequencyHz = frequencyHz;
-                  if (!adoptEnabled()) {
-                    // console.debug('[radio.js] adopt disabled; skipping spectrum-driven freq UI write');
+                  if (!adoptEnabled() || startupFrequencyPending) {
+                    // Don't overwrite requested tuning before RF metadata arrives.
                   } else if (Date.now() < suppressProgrammaticUpdatesUntil) {
                     // console.debug('[radio.js] spectrum update skipped UI write until stabilization window expires');
                   } else {
@@ -2112,6 +2157,7 @@ function sendFilter2(idx) {
                 }
               }
               try { window.Ka9qFmSquelch.onStatus(sqDemodType, sqOpenDb, sqCloseDb); } catch (e) {}
+              resolveStartupFrequencyFromFrontend();
               // Update status display from status packet (runs even when spectrum is paused)
               try { update_stats(); } catch (e) {}
               try { ensurePcmPlayer(); } catch (e) {}

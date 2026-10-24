@@ -213,3 +213,14 @@ reports success only after the backend confirms the values in a subsequent
 status packet. Settings are never automatically replayed on reconnect and do
 not change the RX888's RF gains or other sessions (including AIS). Other
 modes retain existing squelch/PLL behaviour and do not expose these controls.
+
+### Frontend-aware startup frequency
+
+The browser waits for receiver RF coverage metadata (first LO and usable IF
+edges) before sending initial frequency or zoom-centre commands. A supplied
+`?freq=` parameter or saved browser frequency is restored when it falls
+inside the current receiver's coverage; otherwise a valid backend frequency
+wins, falling back to the RF coverage midpoint if necessary. This prevents the
+legacy 10 MHz HF default from overriding a live VHF/UHF receiver. On
+HF-capable receivers 10 MHz is still a valid default. Nothing is retuned
+until complete frontend metadata arrives.
