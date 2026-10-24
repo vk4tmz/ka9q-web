@@ -6,6 +6,43 @@ const root={};
 vm.runInNewContext(src,{window:root},{filename:'fm-squelch.js'});
 const {calculate,valid}=root.Ka9qFmSquelch;
 const plain=x=>JSON.parse(JSON.stringify(x));
+
+test('KA9Q compressed float TLVs include valid zero-length 0 dB',()=>{
+  const decode=root.Ka9qFmSquelch.decodeStatusFloat;
+  const empty=new DataView(new ArrayBuffer(0));
+  assert.equal(decode(empty,0,0),0);
+  // Encode the float32 wire bytes exactly as KA9Q encode_float does:
+  // leading zero bytes are removed; all-zero payload has length zero.
+  for(const expected of [0,0.1,3.9,4,-3.9,-500,1e-40]){
+    const bytes=Buffer.alloc(4);
+    bytes.writeFloatBE(expected,0);
+    let offset=0;
+    while(offset<4 && bytes[offset]===0)offset++;
+    const view=new DataView(bytes.buffer,bytes.byteOffset+offset,4-offset);
+    const actual=decode(view,0,view.byteLength);
+    assert.ok(Math.abs(actual-Math.fround(expected))<=
+      Math.max(1e-43,Math.abs(Math.fround(expected))*1e-6),
+      `compressed float ${expected}: got ${actual}`);
+  }
+  assert.equal(decode(empty,0,5),null);
+  assert.equal(decode(empty,1,0),null);
+});
+
+test('FM squelch confirms Open 4.0 and zero-length Close 0.0 readback',()=>{
+  const {nodes,commands,ui}=setup();
+  ui.onStatus(1,4.1,0.1);
+  nodes.fmSqOpen.value='4.0';
+  nodes.fmSqOpen.fire('input');
+  assert.equal(nodes.fmSqClose.value,'0');
+  nodes.fmSqApply.fire('click');
+  assert.match(commands[0][1],/^Q:4\\.0:0\\.0:/);
+  const zero=ui.decodeStatusFloat(new DataView(new ArrayBuffer(0)),0,0);
+  ui.onStatus(1,4,zero);
+  assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
+  assert.equal(nodes.fmSqOpen.value,'4.0');
+  assert.equal(nodes.fmSqClose.value,'0.0');
+});
+
 test('Open/Close and hysteresis are linked',()=>{
   assert.deepEqual(plain(calculate(10,6,4,'close')),{open:10,close:6,hysteresis:4});
   assert.deepEqual(plain(calculate(12,6,4,'open')),{open:12,close:8,hysteresis:4});
