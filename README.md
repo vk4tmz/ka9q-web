@@ -239,8 +239,14 @@ restored. The UI times out after 8 seconds if there is no matching receiver
 status, instead of waiting indefinitely. The server logs per-session squelch
 commands for diagnostics. No RX888 RF gains or AIS session settings change.
 
-**Normal FM squelch minimum:** Open must be at least **+0.1 dB SNR**.
-The receiver did not reliably confirm a normal 0.0 dB setting in live tests,
-while +0.1 dB / −3.9 dB (4 dB hysteresis) confirmed correctly. The browser
-and server therefore reject Open=0.0 for normal squelch. Use the separate
-**Monitor** control for always-open noise/audio instead of setting Open to zero.
+**Normal FM squelch minimum:** Open may be **0.0 dB SNR**, with Close as low
+as −30 dB (subject to the maximum 30 dB hysteresis). This is an SNR power
+ratio of 1, **not squelch OFF**. Previously, 0.0 dB commands failed to confirm
+because KA9Q encodes a floating-point zero as a zero-length status TLV and
+the browser parser discarded it. The browser now decodes compressed Open **and**
+Close float TLVs; command validation allows 0.0 dB Open. An actual internal
+zero power ratio (from the explicit `Q:MONITOR` command) is still reported as
+the special −500 dB marker, not confused with a normal 0.0 dB threshold.
+
+After rebuilding and restarting **only ka9q-web**, live-verify Open=0.0 /
+Close=−4.0 on a browser SSRC. Do not rebuild or restart radiod for this change.
