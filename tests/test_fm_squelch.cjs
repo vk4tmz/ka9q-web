@@ -49,12 +49,17 @@ test('Open/Close and hysteresis are linked',()=>{
   assert.deepEqual(plain(calculate(10,7,4,'close')),{open:10,close:7,hysteresis:3});
   assert.deepEqual(plain(calculate(10,6,6,'hysteresis')),{open:10,close:4,hysteresis:6});
 });
-test('normal Open permits 0.0 dB but not negative values',()=>{
+test('normal Open permits -30 through +40 dB but rejects out-of-range values',()=>{
+  assert.equal(valid(plain(calculate(-30,-30,0,'close'))),true);
+  assert.equal(valid(plain(calculate(-3,-7,4,'close'))),true);
+  assert.equal(valid(plain(calculate(-0.1,-4.1,4,'close'))),true);
   assert.equal(valid(plain(calculate(0,-4,4,'close'))),true);
   assert.equal(valid(plain(calculate(0,0,0,'close'))),true);
-  assert.equal(valid(plain(calculate(-0.1,-4.1,4,'close'))),false);
-  assert.equal(valid({open:0.05,close:-3.95,hysteresis:4}),false);
   assert.equal(valid(plain(calculate(0.1,-3.9,4,'close'))),true);
+  assert.equal(valid(plain(calculate(-30.1,-30.1,0,'close'))),false);
+  assert.equal(valid(plain(calculate(-30,-30.1,0.1,'close'))),false);
+  assert.equal(valid(plain(calculate(-3,-7,31,'hysteresis'))),false);
+  assert.equal(valid({open:0.05,close:-3.95,hysteresis:4}),false);
   assert.equal(valid({open:0.15,close:-3.85,hysteresis:4}),false);
 });
 test('invalid combinations rejected',()=>{
@@ -76,16 +81,9 @@ function setup(){
   vm.runInNewContext(src,{window:client,Date},{filename:'fm-squelch.js'});
   return {nodes,commands,timers,ui:client.Ka9qFmSquelch};
 }
-test('normal Open 0.0/-4.0 and 0.1/-3.9 confirm; negative Open rejected',()=>{
+test('normal Open 0.0/-4.0 and 0.1/-3.9 confirm',()=>{
   const {nodes,commands,ui}=setup();
   ui.onStatus(1,10,6);
-  nodes.fmSqOpen.value='-0.1';
-  nodes.fmSqOpen.fire('input');
-  assert.equal(nodes.fmSqApply.disabled,true);
-  assert.match(nodes.fmSqStatus.textContent,/at least 0\.0 dB/);
-  nodes.fmSqApply.fire('click');
-  assert.equal(commands.length,0);
-
   nodes.fmSqOpen.value='0';
   nodes.fmSqOpen.fire('input');
   assert.equal(nodes.fmSqClose.value,'-4');
@@ -106,6 +104,54 @@ test('normal Open 0.0/-4.0 and 0.1/-3.9 confirm; negative Open rejected',()=>{
   assert.match(nodes.fmSqStatus.textContent,/awaiting radiod readback/);
   ui.onStatus(1,0.1,-3.9);
   assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
+});
+test('negative Open -3.0 dB and -30.0 boundary confirm as normal squelch',()=>{
+  const {nodes,commands,ui}=setup();
+  ui.onStatus(1,10,6);
+  nodes.fmSqOpen.value='-30.1';
+  nodes.fmSqOpen.fire('input');
+  assert.equal(nodes.fmSqApply.disabled,true);
+  assert.match(nodes.fmSqStatus.textContent,/at least -30\\.0 dB/);
+  nodes.fmSqApply.fire('click');
+  assert.equal(commands.length,0);
+
+  nodes.fmSqOpen.value='-3';
+  nodes.fmSqOpen.fire('input');
+  assert.equal(nodes.fmSqClose.value,'-7');
+  assert.equal(nodes.fmSqApply.disabled,false);
+  nodes.fmSqApply.fire('click');
+  assert.match(commands[0][1],/^Q:-3\\.0:-7\\.0:/);
+  ui.onStatus(1,-3,-7);
+  assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
+  assert.equal(nodes.fmSqMonitor.checked,false);
+  assert.equal(nodes.fmSqOpen.value,'-3.0');
+
+  nodes.fmSqHysteresis.value='0';
+  nodes.fmSqHysteresis.fire('input');
+  nodes.fmSqOpen.value='-30';
+  nodes.fmSqOpen.fire('input');
+  assert.equal(nodes.fmSqClose.value,'-30');
+  assert.equal(nodes.fmSqApply.disabled,false);
+  nodes.fmSqApply.fire('click');
+  assert.match(commands[1][1],/^Q:-30\\.0:-30\\.0:/);
+  ui.onStatus(1,-30,-30);
+  assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
+  assert.equal(nodes.fmSqMonitor.checked,false);
+});
+test('Monitor restores last negative normal Open and Close values',()=>{
+  const {nodes,commands,ui}=setup();
+  ui.onStatus(1,-3,-7);
+  nodes.fmSqMonitor.checked=true;
+  nodes.fmSqMonitor.fire('change');
+  assert.match(commands[0][1],/^Q:MONITOR:/);
+  ui.onStatus(1,-500,-500);
+  assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
+  nodes.fmSqMonitor.checked=false;
+  nodes.fmSqMonitor.fire('change');
+  assert.match(commands[1][1],/^Q:-3\\.0:-7\\.0:/);
+  ui.onStatus(1,-3,-7);
+  assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
+  assert.equal(nodes.fmSqMonitor.checked,false);
 });
 test('Monitor command, receiver confirmation and restore of previous thresholds',()=>{
   const {nodes,commands,ui}=setup();
