@@ -27,3 +27,44 @@ test('valid rejects inconsistent thresholds and illegal ranges', () => {
   assert.equal(valid(plain(calculate(41, 6, 4, 'open'))), false);
   assert.equal(valid(plain(calculate(10, -30, 40, 'close'))), false);
 });
+
+test('FM status enables Apply, sends SSRC-scoped message, and confirms readback', () => {
+  function element(value = '') {
+    return {
+      value, textContent:'', disabled:false, hidden:false, style:{},
+      handlers:{}, addEventListener(kind, fn) { this.handlers[kind] = fn; },
+      fire(kind) { if (this.handlers[kind]) this.handlers[kind](); }
+    };
+  }
+  const nodes = {
+    mode:element('fm'), fmSquelchControls:element(),
+    fmSqOpen:element(), fmSqClose:element(), fmSqHysteresis:element(),
+    fmSqApply:element(), fmSqStatus:element()
+  };
+  const commands = [];
+  const client = {
+    document:{ readyState:'complete', getElementById(id) { return nodes[id] || null; } },
+    sendControl(...args) { commands.push(args); }
+  };
+  vm.runInNewContext(src, { window:client, Date }, { filename:'fm-squelch.js' });
+  const ui = client.Ka9qFmSquelch;
+  ui.onStatus(1, 10, 6);
+  assert.equal(nodes.fmSqOpen.value, '10.0');
+  assert.equal(nodes.fmSqClose.value, '6.0');
+  assert.equal(nodes.fmSqHysteresis.value, '4.0');
+  assert.equal(nodes.fmSqApply.disabled, true);
+  nodes.fmSqHysteresis.value = '6';
+  nodes.fmSqHysteresis.fire('input');
+  assert.equal(nodes.fmSqClose.value, '4');
+  assert.equal(nodes.fmSqApply.disabled, false);
+  nodes.fmSqApply.fire('click');
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0][1], 'Q:10.0:4.0');
+  assert.match(nodes.fmSqStatus.textContent, /awaiting radiod readback/);
+  ui.onStatus(1, 10, 4);
+  assert.match(nodes.fmSqStatus.textContent, /confirmed by radiod/);
+  nodes.mode.value = 'usb';
+  nodes.mode.fire('change');
+  assert.equal(nodes.fmSquelchControls.hidden, true);
+  assert.equal(nodes.fmSqApply.disabled, true);
+});

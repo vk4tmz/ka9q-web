@@ -951,7 +951,7 @@ static onion_connection_status handle_ws_message(struct session *sp, char *tmp) 
           char *end_open = NULL, *end_close = NULL;
           double open_db = open_text ? strtod(open_text, &end_open) : NAN;
           double close_db = close_text ? strtod(close_text, &end_close) : NAN;
-          if (sp->last_demod_type != FM_DEMOD && sp->last_demod_type != WFM_DEMOD) {
+          if (sp->last_demod_type != 1 && sp->last_demod_type != 2) /* radiod DEMOD_TYPE: 1=FM, 2=WFM */ {
             send_ws_text_to_session(sp, "SQERR:FM/WFM demodulator required");
           } else if (!open_text || !close_text || end_open == open_text ||
                      end_close == close_text || *end_open != '\0' || *end_close != '\0' ||
