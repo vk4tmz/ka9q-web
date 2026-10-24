@@ -35,7 +35,7 @@ test('FM squelch confirms Open 4.0 and zero-length Close 0.0 readback',()=>{
   nodes.fmSqOpen.fire('input');
   assert.equal(nodes.fmSqClose.value,'0');
   nodes.fmSqApply.fire('click');
-  assert.match(commands[0][1],/^Q:4\\.0:0\\.0:/);
+  assert.match(commands[0][1],/^Q:4\.0:0\.0:/);
   const zero=ui.decodeStatusFloat(new DataView(new ArrayBuffer(0)),0,0);
   ui.onStatus(1,4,zero);
   assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
