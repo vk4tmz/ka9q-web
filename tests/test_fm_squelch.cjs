@@ -1,70 +1,85 @@
 'use strict';
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const path = require('node:path');
-const src = fs.readFileSync(path.join(__dirname, '..', 'html', 'fm-squelch.js'), 'utf8');
-const root = {};
-vm.runInNewContext(src, { window: root }, { filename: 'fm-squelch.js' });
-const { calculate, valid } = root.Ka9qFmSquelch;
-const plain = x => JSON.parse(JSON.stringify(x));
-test('hysteresis is the difference between open and close thresholds', () => {
-  assert.deepEqual(plain(calculate(10, 6, 4, 'close')), { open:10, close:6, hysteresis:4 });
+const test=require('node:test'),assert=require('node:assert/strict');
+const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+const src=fs.readFileSync(path.join(__dirname,'..','html','fm-squelch.js'),'utf8');
+const root={};
+vm.runInNewContext(src,{window:root},{filename:'fm-squelch.js'});
+const {calculate,valid}=root.Ka9qFmSquelch;
+const plain=x=>JSON.parse(JSON.stringify(x));
+test('Open/Close and hysteresis are linked',()=>{
+  assert.deepEqual(plain(calculate(10,6,4,'close')),{open:10,close:6,hysteresis:4});
+  assert.deepEqual(plain(calculate(12,6,4,'open')),{open:12,close:8,hysteresis:4});
+  assert.deepEqual(plain(calculate(10,7,4,'close')),{open:10,close:7,hysteresis:3});
+  assert.deepEqual(plain(calculate(10,6,6,'hysteresis')),{open:10,close:4,hysteresis:6});
 });
-test('changing open preserves hysteresis by adjusting close', () => {
-  assert.deepEqual(plain(calculate(12, 6, 4, 'open')), { open:12, close:8, hysteresis:4 });
+test('0 dB open with negative close is a valid normal threshold, not Monitor',()=>{
+  assert.equal(valid(plain(calculate(0,-4,4,'close'))),true);
 });
-test('changing close recomputes hysteresis', () => {
-  assert.deepEqual(plain(calculate(10, 7, 4, 'close')), { open:10, close:7, hysteresis:3 });
+test('invalid combinations rejected',()=>{
+  assert.equal(valid(plain(calculate(5,7,4,'close'))),false);
+  assert.equal(valid(plain(calculate(41,6,4,'open'))),false);
 });
-test('changing hysteresis recomputes close', () => {
-  assert.deepEqual(plain(calculate(10, 6, 6, 'hysteresis')), { open:10, close:4, hysteresis:6 });
-});
-test('valid rejects inconsistent thresholds and illegal ranges', () => {
-  assert.equal(valid(plain(calculate(10, 6, 4, 'close'))), true);
-  assert.equal(valid(plain(calculate(5, 7, 4, 'close'))), false);
-  assert.equal(valid(plain(calculate(41, 6, 4, 'open'))), false);
-  assert.equal(valid(plain(calculate(10, -30, 40, 'close'))), false);
-});
-
-test('FM status enables Apply, sends SSRC-scoped message, and confirms readback', () => {
-  function element(value = '') {
-    return {
-      value, textContent:'', disabled:false, hidden:false, style:{},
-      handlers:{}, addEventListener(kind, fn) { this.handlers[kind] = fn; },
-      fire(kind) { if (this.handlers[kind]) this.handlers[kind](); }
-    };
+function setup(){
+  function node(value=''){
+    return {value,checked:false,disabled:false,hidden:false,textContent:'',style:{},handlers:{},
+      addEventListener(k,fn){this.handlers[k]=fn},fire(k){this.handlers[k]?.()}};
   }
-  const nodes = {
-    mode:element('fm'), fmSquelchControls:element(),
-    fmSqOpen:element(), fmSqClose:element(), fmSqHysteresis:element(),
-    fmSqApply:element(), fmSqStatus:element()
-  };
-  const commands = [];
-  const client = {
-    document:{ readyState:'complete', getElementById(id) { return nodes[id] || null; } },
-    sendControl(...args) { commands.push(args); }
-  };
-  vm.runInNewContext(src, { window:client, Date }, { filename:'fm-squelch.js' });
-  const ui = client.Ka9qFmSquelch;
-  ui.onStatus(1, 10, 6);
-  assert.equal(nodes.fmSqOpen.value, '10.0');
-  assert.equal(nodes.fmSqClose.value, '6.0');
-  assert.equal(nodes.fmSqHysteresis.value, '4.0');
-  assert.equal(nodes.fmSqApply.disabled, true);
-  nodes.fmSqHysteresis.value = '6';
-  nodes.fmSqHysteresis.fire('input');
-  assert.equal(nodes.fmSqClose.value, '4');
-  assert.equal(nodes.fmSqApply.disabled, false);
+  const nodes={mode:node('fm'),fmSquelchControls:node(),fmSqOpen:node(),
+    fmSqClose:node(),fmSqHysteresis:node(),fmSqApply:node(),
+    fmSqMonitor:node(),fmSqStatus:node()};
+  const commands=[],timers=[];
+  const client={document:{readyState:'complete',getElementById:id=>nodes[id]||null},
+    sendControl(...args){commands.push(args)},
+    setTimeout(fn,delay){timers.push({fn,delay})}};
+  vm.runInNewContext(src,{window:client,Date},{filename:'fm-squelch.js'});
+  return {nodes,commands,timers,ui:client.Ka9qFmSquelch};
+}
+test('normal 0 dB threshold is sent, and radiod confirmation is required',()=>{
+  const {nodes,commands,ui}=setup();
+  ui.onStatus(1,10,6);
+  nodes.fmSqOpen.value='0';
+  nodes.fmSqOpen.fire('input');
+  assert.equal(nodes.fmSqClose.value,'-4');
   nodes.fmSqApply.fire('click');
-  assert.equal(commands.length, 1);
-  assert.equal(commands[0][1], 'Q:10.0:4.0');
-  assert.match(nodes.fmSqStatus.textContent, /awaiting radiod readback/);
-  ui.onStatus(1, 10, 4);
-  assert.match(nodes.fmSqStatus.textContent, /confirmed by radiod/);
-  nodes.mode.value = 'usb';
+  assert.match(commands[0][1],/^Q:0\.0:-4\.0:/);
+  assert.match(nodes.fmSqStatus.textContent,/awaiting radiod readback/);
+  ui.onStatus(1,0,-4);
+  assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
+});
+test('Monitor command, receiver confirmation and restore of previous thresholds',()=>{
+  const {nodes,commands,ui}=setup();
+  ui.onStatus(1,10,6);
+  nodes.fmSqMonitor.checked=true;
+  nodes.fmSqMonitor.fire('change');
+  assert.match(commands[0][1],/^Q:MONITOR:/);
+  assert.match(nodes.fmSqStatus.textContent,/awaiting radiod readback/);
+  ui.onStatus(1,-500,-500);
+  assert.equal(nodes.fmSqMonitor.checked,true);
+  assert.equal(nodes.fmSqOpen.disabled,true);
+  assert.match(nodes.fmSqStatus.textContent,/confirmed by radiod/);
+  nodes.fmSqMonitor.checked=false;
+  nodes.fmSqMonitor.fire('change');
+  assert.match(commands[1][1],/^Q:10\.0:6\.0:/);
+  ui.onStatus(1,10,6);
+  assert.equal(nodes.fmSqMonitor.checked,false);
+  assert.equal(nodes.fmSqOpen.disabled,false);
+});
+test('No status readback times out and does not claim success',()=>{
+  const {nodes,timers,ui}=setup();
+  ui.onStatus(1,10,6);
+  nodes.fmSqOpen.value='0.5';
+  nodes.fmSqOpen.fire('input');
+  nodes.fmSqApply.fire('click');
+  assert.equal(timers.length,1);
+  assert.equal(timers[0].delay,8000);
+  timers[0].fn();
+  assert.match(nodes.fmSqStatus.textContent,/No matching radiod readback/);
+});
+test('controls hidden in USB mode and cannot Apply',()=>{
+  const {nodes,ui}=setup();
+  ui.onStatus(1,10,6);
+  nodes.mode.value='usb';
   nodes.mode.fire('change');
-  assert.equal(nodes.fmSquelchControls.hidden, true);
-  assert.equal(nodes.fmSqApply.disabled, true);
+  assert.equal(nodes.fmSquelchControls.hidden,true);
+  assert.equal(nodes.fmSqApply.disabled,true);
 });

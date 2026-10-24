@@ -1,130 +1,166 @@
-/*
- * FM squelch controls for the current ka9q-web audio SSRC.
- * Server and radiod are authoritative. No settings are sent automatically.
- * Hysteresis is not a separate backend value: H = Open - Close (all dB SNR).
+/* FM squelch and Monitor controls, scoped to this browser's audio SSRC.
+ * radiod has Open and Close thresholds in dB SNR. Hysteresis = Open - Close.
+ * The explicit Monitor command is Q:MONITOR, and the backend converts finite
+ * -500 dB to an internal zero threshold (the FM always-open condition).
  */
 (function(root) {
   'use strict';
   const $ = id => root.document && root.document.getElementById(id);
-  const state = { actual: null, demod: null, dirty: false, pending: null };
+  const state = {actual:null, lastNormal:null, demod:null, dirty:false, pending:null};
   const round = n => Math.round(n * 10) / 10;
+  const normalDefault = {open:8,close:7,hysteresis:1};
+  const MONITOR_DB = -500;
+  let requestId = 0;
 
-  function calculate(open, close, hysteresis, changed) {
-    open = Number(open); close = Number(close); hysteresis = Number(hysteresis);
-    if (changed === 'open' || changed === 'hysteresis')
-      close = round(open - hysteresis);
-    else if (changed === 'close')
-      hysteresis = round(open - close);
-    return { open: round(open), close: round(close), hysteresis: round(hysteresis) };
+  function calculate(open,close,hysteresis,changed) {
+    open=Number(open);close=Number(close);hysteresis=Number(hysteresis);
+    if (changed==='open' || changed==='hysteresis') close=round(open-hysteresis);
+    else if (changed==='close') hysteresis=round(open-close);
+    return {open:round(open),close:round(close),hysteresis:round(hysteresis)};
   }
   function valid(x) {
-    return [x.open, x.close, x.hysteresis].every(Number.isFinite) &&
-      x.open >= 0 && x.open <= 40 && x.close >= -30 &&
-      x.close <= 40 && x.close <= x.open &&
-      x.hysteresis >= 0 && x.hysteresis <= 30 &&
-      Math.abs(x.hysteresis - (x.open - x.close)) < 0.11;
+    return [x.open,x.close,x.hysteresis].every(Number.isFinite) &&
+      x.open>=0 && x.open<=40 && x.close>=-30 &&
+      x.close<=40 && x.close<=x.open &&
+      x.hysteresis>=0 && x.hysteresis<=30 &&
+      Math.abs(x.hysteresis-(x.open-x.close))<0.11;
   }
   function values() {
-    return calculate($('fmSqOpen').value, $('fmSqClose').value,
-                     $('fmSqHysteresis').value, '');
+    return calculate($('fmSqOpen').value,$('fmSqClose').value,$('fmSqHysteresis').value,'');
   }
   function writeValues(x) {
-    $('fmSqOpen').value = x.open.toFixed(1);
-    $('fmSqClose').value = x.close.toFixed(1);
-    $('fmSqHysteresis').value = x.hysteresis.toFixed(1);
+    $('fmSqOpen').value=x.open.toFixed(1);
+    $('fmSqClose').value=x.close.toFixed(1);
+    $('fmSqHysteresis').value=x.hysteresis.toFixed(1);
   }
-  function message(s) { const el = $('fmSqStatus'); if (el) el.textContent = s; }
-  function fmSelected() {
-    const mode = $('mode');
-    return mode && ['fm', 'wfm'].includes((mode.value || '').toLowerCase());
-  }
-  function backendFm() { return state.demod === 1 || state.demod === 2; }
+  function message(msg) {const el=$('fmSqStatus');if(el)el.textContent=msg;}
+  function fmSelected() {const el=$('mode');return !!el && ['fm','wfm'].includes((el.value||'').toLowerCase());}
+  function backendFm() {return state.demod===1 || state.demod===2;}
   function refreshMode() {
-    const group = $('fmSquelchControls'), button = $('fmSqApply');
-    if (!group || !button) return;
-    const visible = fmSelected();
-    group.hidden = !visible;
-    group.style.display = visible ? 'block' : 'none';
-    button.disabled = !visible || !backendFm() || !state.actual ||
-                      !state.dirty || !valid(values());
-    if (visible && !backendFm()) message('Waiting for FM demodulator status');
+    const group=$('fmSquelchControls'),btn=$('fmSqApply'),toggle=$('fmSqMonitor');
+    if(!group || !btn || !toggle)return;
+    const visible=fmSelected(),ready=visible && backendFm() && !!state.actual;
+    group.hidden=!visible;
+    group.style.display=visible?'block':'none';
+    const displayedMonitor=state.pending ? state.pending.monitor : !!state.actual?.monitor;
+    toggle.disabled=!ready || !!state.pending;
+    if(!state.pending)toggle.checked=!!state.actual?.monitor;
+    for(const name of ['fmSqOpen','fmSqClose','fmSqHysteresis']) {
+      const el=$(name);if(el)el.disabled=!ready || displayedMonitor || !!state.pending;
+    }
+    btn.disabled=!ready || displayedMonitor || !!state.pending || !state.dirty || !valid(values());
+    if(visible && !backendFm())message('Waiting for FM demodulator status');
   }
   function edit(changed) {
-    const open = Number($('fmSqOpen').value), close = Number($('fmSqClose').value);
-    const hys = Number($('fmSqHysteresis').value);
-    const result = calculate(open, close, hys, changed);
-    if (changed !== 'open') $('fmSqOpen').value = String(result.open);
-    if (changed !== 'close') $('fmSqClose').value = String(result.close);
-    if (changed !== 'hysteresis') $('fmSqHysteresis').value = String(result.hysteresis);
-    state.dirty = true;
-    message(valid(result) ? 'Edited — press Apply' : 'Invalid thresholds (Open 0–40, Close −30–40, Hysteresis 0–30 dB)');
+    if(state.pending || state.actual?.monitor)return;
+    const result=calculate($('fmSqOpen').value,$('fmSqClose').value,
+                           $('fmSqHysteresis').value,changed);
+    if(changed!=='open')$('fmSqOpen').value=String(result.open);
+    if(changed!=='close')$('fmSqClose').value=String(result.close);
+    if(changed!=='hysteresis')$('fmSqHysteresis').value=String(result.hysteresis);
+    state.dirty=true;
+    message(valid(result)?'Edited — press Apply':'Invalid squelch threshold combination');
     refreshMode();
+  }
+  function issue(messageText,want) {
+    if (typeof root.sendControl!=='function') {message('WebSocket control unavailable');return;}
+    const pending={...want,since:Date.now(),id:++requestId};
+    state.pending=pending;
+    state.dirty=false;
+    message('Requested — awaiting radiod readback');
+    // Suffix prevents the WebSocket coalescer from dropping a repeated Q
+    // request. The C handler intentionally reads just the first two values.
+    const command=messageText+':'+pending.id;
+    try {root.sendControl('squelch',command,undefined,true);}
+    catch(e) {state.pending=null;state.dirty=true;message('WebSocket send failed: '+String(e));}
+    refreshMode();
+    if(state.pending===pending && typeof root.setTimeout==='function') {
+      root.setTimeout(() => {
+        if(state.pending!==pending)return;
+        state.pending=null;
+        state.dirty=true;
+        message('No matching radiod readback within 8 s — check server log');
+        refreshMode();
+      },8000);
+    }
   }
   function apply() {
-    const x = values();
-    if (!valid(x) || !fmSelected() || !backendFm() || !state.actual) {
-      message('Cannot apply: check mode, backend status and threshold values');
-      return;
+    const x=values();
+    if(!valid(x) || !fmSelected() || !backendFm() || !state.actual || state.pending || state.actual.monitor) {
+      message('Cannot apply: check mode, backend status and threshold values');return;
     }
-    if (typeof root.sendControl !== 'function') {
-      message('WebSocket control unavailable'); return;
-    }
-    state.pending = { open: x.open, close: x.close, since: Date.now() };
-    state.dirty = false;
-    message('Sent — awaiting radiod readback');
-    root.sendControl('squelch', 'Q:' + x.open.toFixed(1) + ':' + x.close.toFixed(1), undefined, true);
-    refreshMode();
+    issue('Q:'+x.open.toFixed(1)+':'+x.close.toFixed(1),
+          {monitor:false,open:x.open,close:x.close});
   }
-  function onStatus(demod, open, close) {
-    if (Number.isInteger(demod)) state.demod = demod;
-    if (Number.isFinite(open) && Number.isFinite(close) && open >= -30 && close >= -30) {
-      const actual = calculate(open, close, open - close, 'close');
-      state.actual = actual;
-      if (state.pending) {
-        if (Math.abs(actual.open - state.pending.open) < 0.15 &&
-            Math.abs(actual.close - state.pending.close) < 0.15) {
-          state.pending = null;
-          message('Applied — confirmed by radiod');
-        } else if (Date.now() - state.pending.since > 8000) {
-          state.pending = null;
-          message('No matching radiod readback; settings may not have applied');
+  function toggleMonitor() {
+    const toggle=$('fmSqMonitor');
+    if(!toggle || !fmSelected() || !backendFm() || !state.actual || state.pending)return;
+    if(toggle.checked) {
+      if(!state.actual.monitor && valid(values()))state.lastNormal=values();
+      issue('Q:MONITOR',{monitor:true});
+    } else {
+      const x=state.lastNormal || normalDefault;
+      issue('Q:'+x.open.toFixed(1)+':'+x.close.toFixed(1),
+            {monitor:false,open:x.open,close:x.close});
+    }
+  }
+  function onStatus(demod,open,close) {
+    if(Number.isInteger(demod))state.demod=demod;
+    const monitor=Number.isFinite(open) && Number.isFinite(close) &&
+                  open<=-100 && close<=-100;
+    const normal=Number.isFinite(open) && Number.isFinite(close) &&
+                 open>=-30 && open<=40 && close>=-30 && close<=40 && close<=open;
+    if(monitor || normal) {
+      const actual=monitor?{monitor:true}: {...calculate(open,close,open-close,'close'),monitor:false};
+      state.actual=actual;
+      if(normal)state.lastNormal=actual;
+      if(state.pending) {
+        const p=state.pending;
+        const match=p.monitor===actual.monitor &&
+          (p.monitor || (Math.abs(p.open-actual.open)<0.15 &&
+                         Math.abs(p.close-actual.close)<0.15));
+        if(match) {
+          state.pending=null;
+          message('Applied — confirmed by radiod'+(actual.monitor?' (Monitor ON)':''));
         }
       }
-      if (!state.dirty && !state.pending) {
-        writeValues(actual);
-        if (!$('fmSqStatus').textContent.startsWith('Applied') &&
-            !$('fmSqStatus').textContent.startsWith('No matching'))
-          message('Radiod: Open ' + actual.open.toFixed(1) +
-                  ' / Close ' + actual.close.toFixed(1) + ' dB');
+      if(!state.pending && !state.dirty) {
+        if(!actual.monitor)writeValues(actual);
+        else if(state.lastNormal)writeValues(state.lastNormal);
+        const s=$('fmSqStatus')?.textContent || '';
+        if(!s.startsWith('Applied') && !s.startsWith('No matching'))
+          message(actual.monitor?'Monitor active — FM squelch OFF':
+                  'Radiod: Open '+actual.open.toFixed(1)+' / Close '+actual.close.toFixed(1)+' dB');
       }
     }
     refreshMode();
   }
   function reset() {
-    state.actual = null; state.demod = null;
-    state.dirty = false; state.pending = null;
-    const group = $('fmSquelchControls');
-    if (group) message('Waiting for FM status');
+    state.actual=null;state.demod=null;state.pending=null;state.dirty=false;
+    const toggle=$('fmSqMonitor');if(toggle)toggle.checked=false;
+    message('Waiting for FM status');
     refreshMode();
   }
-  function error(s) { state.pending = null; state.dirty = true; message('Receiver: ' + s); refreshMode(); }
+  function error(s) {
+    state.pending=null;state.dirty=true;
+    message('Receiver: '+s);refreshMode();
+  }
   function init() {
-    const btn = $('fmSqApply');
-    if (!btn) return;
-    ['open', 'close', 'hysteresis'].forEach(k => {
-      const id = { open:'fmSqOpen', close:'fmSqClose', hysteresis:'fmSqHysteresis' }[k];
-      const el = $(id);
-      if (el) el.addEventListener('input', () => edit(k));
-    });
-    btn.addEventListener('click', apply);
-    const mode = $('mode');
-    if (mode) mode.addEventListener('change', refreshMode);
+    const btn=$('fmSqApply'),toggle=$('fmSqMonitor');
+    if(!btn || !toggle)return;
+    for(const k of ['open','close','hysteresis']){
+      const el=$({open:'fmSqOpen',close:'fmSqClose',hysteresis:'fmSqHysteresis'}[k]);
+      if(el)el.addEventListener('input',()=>edit(k));
+    }
+    btn.addEventListener('click',apply);
+    toggle.addEventListener('change',toggleMonitor);
+    const mode=$('mode');if(mode)mode.addEventListener('change',refreshMode);
     refreshMode();
   }
-  root.Ka9qFmSquelch = { calculate, valid, onStatus, refreshMode, reset, error };
-  if (root.document) {
-    if (root.document.readyState === 'loading')
-      root.document.addEventListener('DOMContentLoaded', init, { once: true });
+  root.Ka9qFmSquelch={calculate,valid,onStatus,refreshMode,reset,error};
+  if(root.document){
+    if(root.document.readyState==='loading')
+      root.document.addEventListener('DOMContentLoaded',init,{once:true});
     else init();
   }
-})(typeof window !== 'undefined' ? window : {});
+})(typeof window !== 'undefined'?window:{});

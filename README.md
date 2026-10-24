@@ -224,3 +224,17 @@ wins, falling back to the RF coverage midpoint if necessary. This prevents the
 legacy 10 MHz HF default from overriding a live VHF/UHF receiver. On
 HF-capable receivers 10 MHz is still a valid default. Nothing is retuned
 until complete frontend metadata arrives.
+
+### FM Monitor / unsquelched receive audio
+
+FM and WFM mode now offer a separate **Monitor (squelch OFF)** checkbox.
+This is different from an *Open threshold of 0 dB SNR*, which is a
+**linear power ratio of 1**, not an always-open squelch. The server sends
+finite -500 dB thresholds in Monitor mode. Radiod converts these into
+zero-valued float SNR thresholds, which opens FM squelch even at its
+zero-clamped noise SNR floor. The server sends a finite -500 dB readback
+marker for internal zero thresholds; the browser recognizes it as Monitor.
+When Monitor is disabled, the last received normal Open/Close values are
+restored. The UI times out after 8 seconds if there is no matching receiver
+status, instead of waiting indefinitely. The server logs per-session squelch
+commands for diagnostics. No RX888 RF gains or AIS session settings change.

@@ -137,6 +137,12 @@
                             <input id="fmSqHysteresis" type="number" min="0" max="30" step="0.5" style="width:5.5ch;" title="Open threshold minus close threshold; changing this adjusts Close" />
                             <button id="fmSqApply" type="button" disabled>Apply</button>
                           </div>
+                          <div style="margin-top:5px;">
+                            <label title="Disable FM SNR squelch and hear unsquelched receiver noise">
+                              <input id="fmSqMonitor" type="checkbox" />
+                              Monitor (squelch OFF — constant audio)
+                            </label>
+                          </div>
                           <div id="fmSqStatus" role="status" aria-live="polite" style="margin-top:3px;">Waiting for FM status</div>
                         </div>
                         <!-- Filter edge controls: compact inputs. Tight margins to save space -->

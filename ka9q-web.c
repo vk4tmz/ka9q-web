@@ -953,6 +953,13 @@ static onion_connection_status handle_ws_message(struct session *sp, char *tmp) 
           double close_db = close_text ? strtod(close_text, &end_close) : NAN;
           if (sp->last_demod_type != 1 && sp->last_demod_type != 2) /* radiod DEMOD_TYPE: 1=FM, 2=WFM */ {
             send_ws_text_to_session(sp, "SQERR:FM/WFM demodulator required");
+          } else if (open_text && strcasecmp(open_text, "MONITOR") == 0) {
+            /* Optional trailing request sequence is ignored; like the numeric
+               command, only the first relevant argument controls the SSRC. */
+            /* radiod accepts only finite dB threshold commands.
+               -500 dB underflows dB2power() to ZERO (float) and FM treats
+               an internal zero threshold as an always-open squelch. */
+            control_set_squelch(sp, -500.0f, -500.0f);
           } else if (!open_text || !close_text || end_open == open_text ||
                      end_close == close_text || *end_open != '\0' || *end_close != '\0' ||
                      !isfinite(open_db) || !isfinite(close_db) ||
@@ -2567,6 +2574,9 @@ static void control_set_squelch(struct session *sp, float open_db, float close_d
     fprintf(stderr, "squelch command send error (ssrc %u): %s\n",
             sp->ssrc, strerror(errno));
     send_ws_text_to_session(sp, "SQERR:Backend command send failed");
+  } else {
+    fprintf(stderr, "SSRC %u: FM squelch thresholds sent to radiod: open %.1f dB, close %.1f dB%s\n",
+            sp->ssrc, open_db, close_db, open_db == -500.0f ? " (MONITOR)" : "");
   }
   pthread_mutex_unlock(&ctl_mutex);
 }
@@ -4622,10 +4632,12 @@ static void process_status_packet(struct session *sp, uint8_t *buffer, int rx_le
   /* Include demod and actual squelch readback on every channel-status packet.
      radiod stores threshold powers internally; send them to the UI as dB. */
   encode_int(&bp, DEMOD_TYPE, Channel.demod_type);
-  if (isfinite(Channel.squelch.open) && Channel.squelch.open > 0 &&
-      isfinite(Channel.squelch.close) && Channel.squelch.close > 0) {
-    encode_float(&bp, SQUELCH_OPEN, power2dB(Channel.squelch.open));
-    encode_float(&bp, SQUELCH_CLOSE, power2dB(Channel.squelch.close));
+  if (isfinite(Channel.squelch.open) && Channel.squelch.open >= 0 &&
+      isfinite(Channel.squelch.close) && Channel.squelch.close >= 0) {
+    /* Internal zero is the special always-open mode. Send a finite marker
+       that the browser can recognise, not -INFINITY which it discards. */
+    encode_float(&bp, SQUELCH_OPEN, Channel.squelch.open == 0 ? -500.0f : power2dB(Channel.squelch.open));
+    encode_float(&bp, SQUELCH_CLOSE, Channel.squelch.close == 0 ? -500.0f : power2dB(Channel.squelch.close));
   }
   encode_float(&bp, LOW_EDGE, Channel.filter.min_IF);
   encode_float(&bp, HIGH_EDGE, Channel.filter.max_IF);
