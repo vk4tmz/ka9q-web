@@ -2007,6 +2007,31 @@ function sendFilter2(idx) {
                     if (l >= 4) noise_density_audio = view.getFloat32(i, false);
                     i += l;
                     break;
+                  case 34: // FIRST_LO_FREQUENCY: IEEE double, absolute RF Hz
+                    if (l >= 8) {
+                      const lo = view.getFloat64(i, false);
+                      if (Number.isFinite(lo)) spectrum.frontendLoHz = lo;
+                    }
+                    i += l;
+                    break;
+                  case 100: // FE_LOW_EDGE: float32, IF relative to first LO
+                    if (l >= 4) {
+                      const low = view.getFloat32(i, false);
+                      if (Number.isFinite(low)) spectrum.frontendLowIfHz = low;
+                    }
+                    i += l;
+                    break;
+                  case 101: // FE_HIGH_EDGE: float32
+                    if (l >= 4) {
+                      const high = view.getFloat32(i, false);
+                      if (Number.isFinite(high)) spectrum.frontendHighIfHz = high;
+                    }
+                    i += l;
+                    break;
+                  case 102: // FE_ISREAL
+                    if (l >= 1) spectrum.frontendIsReal = !!view.getUint8(i);
+                    i += l;
+                    break;
                   case 104: // AD_OVER (variable-length big-endian uint64)
                     { let _v = 0n; for (let _k = 0; _k < l; _k++) _v = (_v << 8n) | BigInt(view.getUint8(i + _k)); ad_over = _v; }
                     i += l;
