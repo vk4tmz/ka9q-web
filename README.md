@@ -239,14 +239,24 @@ restored. The UI times out after 8 seconds if there is no matching receiver
 status, instead of waiting indefinitely. The server logs per-session squelch
 commands for diagnostics. No RX888 RF gains or AIS session settings change.
 
-**Normal FM squelch minimum:** Open may be **0.0 dB SNR**, with Close as low
-as −30 dB (subject to the maximum 30 dB hysteresis). This is an SNR power
-ratio of 1, **not squelch OFF**. Previously, 0.0 dB commands failed to confirm
-because KA9Q encodes a floating-point zero as a zero-length status TLV and
-the browser parser discarded it. The browser now decodes compressed Open **and**
-Close float TLVs; command validation allows 0.0 dB Open. An actual internal
-zero power ratio (from the explicit `Q:MONITOR` command) is still reported as
-the special −500 dB marker, not confused with a normal 0.0 dB threshold.
+**Normal FM squelch range:** Open and Close each support **−30.0 to +40.0 dB SNR**,
+with Close no higher than Open, and with hysteresis (Open − Close) in
+**0.0–30.0 dB**. Negative dB is a valid positive SNR power ratio below 1,
+not a negative linear power or an indication that squelch is disabled.
+For example, Open −3.0 / Close −7.0 / Hysteresis 4.0 is a normal
+threshold pair; Open −30.0 / Close −30.0 / Hysteresis 0.0 is the lower
+supported boundary. Open 0.0 dB is a ratio of 1 and is also normal squelch.
 
-After rebuilding and restarting **only ka9q-web**, live-verify Open=0.0 /
-Close=−4.0 on a browser SSRC. Do not rebuild or restart radiod for this change.
+The browser correctly decodes KA9Q compressed floating-point readbacks for
+**both** Open and Close, including a zero-length TLV for exactly 0.0 dB.
+The earlier minimum-Open restrictions were web-client/backend validation
+choices, not restrictions in radiod's dB conversion. The separate
+**Monitor (SQ OFF)** checkbox sends a much lower finite −500 dB threshold
+which underflows to an internal zero power ratio and is reported back as
+the special −500 dB marker; this is not confused with ordinary negative
+thresholds. Using the Monitor checkbox is preferred to passing −999 dB,
+which is intentionally outside the normal input range.
+
+After updating, rebuild and restart **only ka9q-web** for the C server-side
+validation change; do not rebuild or restart radiod. Live-check
+Open=−3.0 / Close=−7.0 / Hysteresis=4.0 and verify receiver readback.
