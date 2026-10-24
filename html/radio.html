@@ -328,9 +328,9 @@
                 <div style="display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; align-items:end;">
                     <label for="fmSqOpen" style="display:flex; flex-direction:column; align-items:center; gap:3px; min-width:0;">
                         Open
-                        <input id="fmSqOpen" type="number" min="0" max="40" step="0.1"
+                        <input id="fmSqOpen" type="number" min="-30" max="40" step="0.1"
                                style="box-sizing:border-box; width:100%; max-width:67px; min-width:0; font-size:12px;"
-                               title="Minimum 0.0 dB SNR. For always-open audio use Monitor." />
+                               title="Open SNR threshold: -30 to +40 dB. Use Monitor for guaranteed squelch OFF." />
                     </label>
                     <label for="fmSqClose" style="display:flex; flex-direction:column; align-items:center; gap:3px; min-width:0;">
                         Close
