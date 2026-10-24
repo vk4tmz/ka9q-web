@@ -9,6 +9,7 @@
     <script src="spectrum.js"></script>
     <script src="pcm-player.js"></script>
     <script src="opus-decoder.min.js"></script>
+    <script src="fm-squelch.js"></script>
     <script src="radio.js"></script>
     <script src="smeter.js" defer></script>
     <style>
@@ -123,6 +124,20 @@
                             <option value="user2">USER2</option>
                             <option value="user3">USER3</option>
                         </select>
+                        <!-- FM squelch for the current browser session (read back from radiod). -->
+                        <div id="fmSquelchControls" hidden style="display:none; margin-top:4px; padding:4px; border:1px solid dimgray; border-radius:5px; font-size:12px;">
+                          <strong>FM Squelch (dB SNR)</strong>
+                          <div style="display:flex; flex-wrap:wrap; gap:5px; align-items:center; margin-top:3px;">
+                            <label for="fmSqOpen">Open</label>
+                            <input id="fmSqOpen" type="number" min="0" max="40" step="0.5" style="width:5.5ch;" title="Signal SNR needed to open squelch" />
+                            <label for="fmSqClose">Close</label>
+                            <input id="fmSqClose" type="number" min="-30" max="40" step="0.5" style="width:5.5ch;" title="SNR below which squelch begins closing" />
+                            <label for="fmSqHysteresis">Hysteresis</label>
+                            <input id="fmSqHysteresis" type="number" min="0" max="30" step="0.5" style="width:5.5ch;" title="Open threshold minus close threshold; changing this adjusts Close" />
+                            <button id="fmSqApply" type="button" disabled>Apply</button>
+                          </div>
+                          <div id="fmSqStatus" role="status" aria-live="polite" style="margin-top:3px;">Waiting for FM status</div>
+                        </div>
                         <!-- Filter edge controls: compact inputs. Tight margins to save space -->
                         <div style="display: inline-block; margin-left: 0px; vertical-align: middle;">
                             <!-- Width increased to allow for numeric text + spinner; step set to 100 Hz for caret increments -->

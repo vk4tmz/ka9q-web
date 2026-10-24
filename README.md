@@ -198,3 +198,18 @@ The line above that is different from the original [usb] mode is high = +3.5k, w
 ## Copyright
 
 (C) 2023-2025 John Melton G0ORX - Licensed under the GNU GPL V3 (see [LICENSE](LICENSE))
+
+### FM squelch controls (development branch)
+
+FM and WFM sessions expose **Open**, **Close** and **Hysteresis** in the mode
+controls, but only when an FM demodulator is active. Values are in **dB SNR**.
+Hysteresis is calculated as Open minus Close: editing Open preserves the current
+hysteresis and adjusts Close; editing Close recomputes hysteresis; editing
+Hysteresis adjusts Close. The receiver supports the two threshold fields, not
+an independent third hysteresis field.
+
+Press **Apply** to send both thresholds to this session's audio SSRC. The UI
+reports success only after the backend confirms the values in a subsequent
+status packet. Settings are never automatically replayed on reconnect and do
+not change the RX888's RF gains or other sessions (including AIS). Other
+modes retain existing squelch/PLL behaviour and do not expose these controls.

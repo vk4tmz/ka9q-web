@@ -949,6 +949,7 @@ function sendFilter2(idx) {
       }
 
       function on_ws_open() {
+        try { window.Ka9qFmSquelch.reset(); } catch (e) {}
           // Prevent server-driven programmatic UI writes for a short window
           // while we force-send stored settings so the UI doesn't flash defaults.
           try { blockProgrammaticUpdates(1500); } catch (e) {}
@@ -1507,6 +1508,10 @@ function sendFilter2(idx) {
               }, 400);
             }
           }
+          if (args[0] === 'SQERR') {
+            try { window.Ka9qFmSquelch.error(args.slice(1).join(':')); } catch (e) {}
+            return;
+          }
           // BFREQ: server-sent backend frequency in Hz (e.g., "BFREQ:470000.000")
           // BFREQ_FORCE: server-forced backend frequency update (UI should always apply)
           if ((args[0] === 'BFREQ' || args[0] === 'BFREQ_FORCE') && args.length > 1) {
@@ -1906,6 +1911,7 @@ function sendFilter2(idx) {
             update_stats();
             break;
             case 0x7E: // Channel Data
+              let sqOpenDb = null, sqCloseDb = null, sqDemodType = null;
               while(i<data.byteLength) {
                 var v=view.getInt8(i++);
                 var l=view.getInt8(i++);
@@ -2032,6 +2038,22 @@ function sendFilter2(idx) {
                     if (l >= 1) spectrum.frontendIsReal = !!view.getUint8(i);
                     i += l;
                     break;
+                  case 48: // DEMOD_TYPE
+                    if (l > 0) {
+                      let x = 0;
+                      for (let k = 0; k < l; k++) x = x * 256 + view.getUint8(i + k);
+                      sqDemodType = x;
+                    }
+                    i += l;
+                    break;
+                  case 83: // SQUELCH_OPEN (dB SNR)
+                    if (l >= 4) sqOpenDb = view.getFloat32(i, false);
+                    i += l;
+                    break;
+                  case 84: // SQUELCH_CLOSE (dB SNR)
+                    if (l >= 4) sqCloseDb = view.getFloat32(i, false);
+                    i += l;
+                    break;
                   case 104: // AD_OVER (variable-length big-endian uint64)
                     { let _v = 0n; for (let _k = 0; _k < l; _k++) _v = (_v << 8n) | BigInt(view.getUint8(i + _k)); ad_over = _v; }
                     i += l;
@@ -2089,6 +2111,7 @@ function sendFilter2(idx) {
                     break;
                 }
               }
+              try { window.Ka9qFmSquelch.onStatus(sqDemodType, sqOpenDb, sqCloseDb); } catch (e) {}
               // Update status display from status packet (runs even when spectrum is paused)
               try { update_stats(); } catch (e) {}
               try { ensurePcmPlayer(); } catch (e) {}
@@ -3141,6 +3164,7 @@ function sendFilter2(idx) {
       const modeEl = document.getElementById('mode');
       const prevMode = modeEl ? (modeEl.value || '').toLowerCase() : '';
       if (modeEl) modeEl.value = selected_mode;
+      try { window.Ka9qFmSquelch.refreshMode(); } catch (e) {}
       if (forceSend || !suppressProgrammaticUI) {
         blockProgrammaticUpdates(600);
         // Pass `forceSend` as 4th argument to allow bypassing the programmatic
