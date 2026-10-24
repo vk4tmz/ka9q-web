@@ -12,6 +12,23 @@
   const MONITOR_DB = -500;
   let requestId = 0;
 
+  // KA9Q TLV encode_float() suppresses leading zero bits and represents
+  // the float +0.0 as a zero-length payload. getFloat32() alone therefore
+  // loses valid 0 dB readbacks (e.g., Open 4.0 / Close 0.0).
+  function decodeStatusFloat(view,offset,length) {
+    if(!view || !Number.isInteger(offset) || !Number.isInteger(length) ||
+       offset<0 || length<0 || length>4 || offset+length>view.byteLength)
+      return null;
+    if(length===0)return 0;
+    let bits=0;
+    for(let j=0;j<length;j++)
+      bits=((bits*256)+view.getUint8(offset+j))>>>0;
+    const scratch=new DataView(new ArrayBuffer(4));
+    scratch.setUint32(0,bits,false);
+    const result=scratch.getFloat32(0,false);
+    return Number.isFinite(result)?result:null;
+  }
+
   function calculate(open,close,hysteresis,changed) {
     open=Number(open);close=Number(close);hysteresis=Number(hysteresis);
     if (changed==='open' || changed==='hysteresis') close=round(open-hysteresis);
@@ -171,7 +188,7 @@
     const mode=$('mode');if(mode)mode.addEventListener('change',refreshMode);
     refreshMode();
   }
-  root.Ka9qFmSquelch={calculate,valid,onStatus,refreshMode,reset,error};
+  root.Ka9qFmSquelch={calculate,valid,decodeStatusFloat,onStatus,refreshMode,reset,error};
   if(root.document){
     if(root.document.readyState==='loading')
       root.document.addEventListener('DOMContentLoaded',init,{once:true});
