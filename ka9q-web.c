@@ -184,6 +184,7 @@ struct session {
                                           session's frequency would make every OTHER active session
                                           (on a different frequency) receive a spurious redundant
                                           BFREQ on its next status packet. NaN until first sent. */
+  int last_demod_type; /* last decoded backend demod (0=linear, 1=FM, 2=WFM, -1=unknown) */
   unsigned long last_client_command_ms; /* monotonic ms when local web client last issued freq/mode */
   unsigned long poll_not_before_ms; /* hold status polls briefly after a mode command */
   unsigned long last_filter_edge_command_ms;
@@ -226,6 +227,7 @@ extern int init_control(struct session *sp);
 extern void control_set_frequency(struct session *sp,char *str);
 extern void control_set_mode(struct session *sp,char *str);
 extern void control_set_shift(struct session *sp,char *str);
+static void control_set_squelch(struct session *sp, float open_db, float close_db);
 extern void control_set_filter_edges(struct session *sp, char *low_str, char *high_str);
 extern void control_set_spectrum_average(struct session *sp, char *val_str);
 extern void control_set_spectrum_overlap(struct session *sp, char *val_str);
@@ -950,6 +952,34 @@ static onion_connection_status handle_ws_message(struct session *sp, char *tmp) 
           char *idx = strtok_r(NULL, ":", &saveptr);
           if (idx != NULL) {
             control_set_filter2(sp, idx);
+          }
+        }
+        break;
+      case 'Q': // FM squelch thresholds, both in dB SNR
+        {
+          char *open_text = strtok_r(NULL, ":", &saveptr);
+          char *close_text = strtok_r(NULL, ":", &saveptr);
+          char *end_open = NULL, *end_close = NULL;
+          double open_db = open_text ? strtod(open_text, &end_open) : NAN;
+          double close_db = close_text ? strtod(close_text, &end_close) : NAN;
+          if (sp->last_demod_type != 1 && sp->last_demod_type != 2) /* radiod DEMOD_TYPE: 1=FM, 2=WFM */ {
+            send_ws_text_to_session(sp, "SQERR:FM/WFM demodulator required");
+          } else if (open_text && strcasecmp(open_text, "MONITOR") == 0) {
+            /* Optional trailing request sequence is ignored; like the numeric
+               command, only the first relevant argument controls the SSRC. */
+            /* radiod accepts only finite dB threshold commands.
+               -500 dB underflows dB2power() to ZERO (float) and FM treats
+               an internal zero threshold as an always-open squelch. */
+            control_set_squelch(sp, -500.0f, -500.0f);
+          } else if (!open_text || !close_text || end_open == open_text ||
+                     end_close == close_text || *end_open != '\0' || *end_close != '\0' ||
+                     !isfinite(open_db) || !isfinite(close_db) ||
+                     open_db < -30 || open_db > 40 ||
+                     close_db < -30 || close_db > 40 ||
+                     close_db > open_db || open_db - close_db > 30) {
+            send_ws_text_to_session(sp, "SQERR:Invalid squelch thresholds (Open min -30.0 dB; use Monitor for OFF)");
+          } else {
+            control_set_squelch(sp, (float)open_db, (float)close_db);
           }
         }
         break;
@@ -1889,6 +1919,7 @@ onion_connection_status home(void *data, onion_request * req,
         "  <title>G0ORX Web SDR</title>"
         "  <meta charset=\"UTF-8\" />"
         "  <meta http-equiv=\"refresh\" content=\"0; URL=radio.html\" />"
+        "  <script>location.replace('radio.html'+location.search+location.hash);</script>"
         "</head>"
         "<body>"
         "</body>"
@@ -2105,6 +2136,7 @@ onion_connection_status home(void *data, onion_request * req,
   sp->previous=NULL;
   sp->shift = NAN;
   sp->last_sent_backend_frequency = NAN;
+  sp->last_demod_type = -1;
 
   sp->bins_min_db = -120;
   sp->bins_max_db = 0;
@@ -2535,6 +2567,31 @@ void control_set_frequency(struct session *sp,char *str) {
   - Note: the session's `sp->shift` is updated by incoming status packets; this function
     does not modify `sp->shift` so the backend remains the authoritative source.
 */
+/* Update only this browser session's FM demodulator. Radiod carries two
+   independent dB-valued thresholds; hysteresis = open dB - close dB. */
+static void control_set_squelch(struct session *sp, float open_db, float close_db) {
+  uint8_t cmdbuffer[PKTSIZE];
+  uint8_t *bp = cmdbuffer;
+  *bp++ = CMD;
+  encode_int(&bp, OUTPUT_SSRC, sp->ssrc);
+  encode_int(&bp, LIFETIME, DEFAULT_CHANNEL_LIFETIME);
+  encode_int(&bp, COMMAND_TAG, arc4random());
+  encode_float(&bp, SQUELCH_OPEN, open_db);
+  encode_float(&bp, SQUELCH_CLOSE, close_db);
+  encode_eol(&bp);
+  int const len = (int)(bp - cmdbuffer);
+  pthread_mutex_lock(&ctl_mutex);
+  if (send(Ctl_fd, cmdbuffer, len, 0) != len) {
+    fprintf(stderr, "squelch command send error (ssrc %u): %s\n",
+            sp->ssrc, strerror(errno));
+    send_ws_text_to_session(sp, "SQERR:Backend command send failed");
+  } else {
+    fprintf(stderr, "SSRC %u: FM squelch thresholds sent to radiod: open %.1f dB, close %.1f dB%s\n",
+            sp->ssrc, open_db, close_db, open_db == -500.0f ? " (MONITOR)" : "");
+  }
+  pthread_mutex_unlock(&ctl_mutex);
+}
+
 void control_set_shift(struct session *sp,char *str) {
   uint8_t cmdbuffer[PKTSIZE];
   uint8_t *bp = cmdbuffer;
@@ -4272,6 +4329,7 @@ static void process_status_packet(struct session *sp, uint8_t *buffer, int rx_le
   /* Detect whether this status packet contains an explicit SHIFT_FREQUENCY TLV */
   bool have_shift = tlv_has_type(buffer + 1, rx_length - 1, SHIFT_FREQUENCY);
   decode_radio_status(&Frontend, &Channel, buffer + 1, rx_length - 1);
+  sp->last_demod_type = Channel.demod_type;
 
   /* PRESET is write-only on the nopreset backend. Use the echoed command tag
      to confirm mode changes and retry a lost mode command a bounded number of times.
@@ -4582,6 +4640,16 @@ static void process_status_packet(struct session *sp, uint8_t *buffer, int rx_le
   rtp.seq = rtp_seq++;
   uint8_t *bp = (uint8_t *)hton_rtp((char *)output_buffer, &rtp);
   encode_float(&bp, BASEBAND_POWER, Channel.sig.bb_power);
+  /* Include demod and actual squelch readback on every channel-status packet.
+     radiod stores threshold powers internally; send them to the UI as dB. */
+  encode_int(&bp, DEMOD_TYPE, Channel.demod_type);
+  if (isfinite(Channel.squelch.open) && Channel.squelch.open >= 0 &&
+      isfinite(Channel.squelch.close) && Channel.squelch.close >= 0) {
+    /* Internal zero is the special always-open mode. Send a finite marker
+       that the browser can recognise, not -INFINITY which it discards. */
+    encode_float(&bp, SQUELCH_OPEN, Channel.squelch.open == 0 ? -500.0f : power2dB(Channel.squelch.open));
+    encode_float(&bp, SQUELCH_CLOSE, Channel.squelch.close == 0 ? -500.0f : power2dB(Channel.squelch.close));
+  }
   encode_float(&bp, LOW_EDGE, Channel.filter.min_IF);
   encode_float(&bp, HIGH_EDGE, Channel.filter.max_IF);
   encode_int(&bp, OUTPUT_SAMPRATE, Channel.output.samprate);
