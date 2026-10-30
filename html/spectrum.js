@@ -184,6 +184,11 @@ function Spectrum(id, options) {
     // Throttle sending center requests to backend during drag (ms)
     let lastCenterSend = 0;
     const centerSendInterval = 300; // ms
+    // Filter edge drag state: null, 'low', or 'high'
+    this._filterDragEdge = null;
+    const FILTER_EDGE_HIT_PX = 6; // pixel hit-test tolerance for grabbing a filter edge
+    let lastFilterEdgeSend = 0;
+    const filterEdgeSendInterval = 100; // ms, throttle network sends while dragging a filter edge
     const spectrum = this;
 
     // Try to flush any pending frequency message when websocket buffer drains
@@ -244,20 +249,21 @@ function Spectrum(id, options) {
         }
     };
 
-    this.checkFrequencyIsValid = function(frequencyRequested) {
-        if (typeof this.input_samprate !== "number" || isNaN(this.input_samprate)) {
-            console.warn("input_samprate is not set on spectrum object.");
-            return false;
-        }
-        const validFrequency = frequencyRequested >= 0 && frequencyRequested <= this.input_samprate / 2;
-        if (!validFrequency) {
-            console.warn("Requested frequency is out of range: " + frequencyRequested);
-        }
-        return validFrequency;
-    };
-
     this.canvas.addEventListener('mousedown', function(e) {
-        if (e.button === 0) { // Left mouse button: start possible click or drag
+        if (e.button === 0) { // Left mouse button: start possible click or drag, or filter-edge drag
+            const edgePixels = window.filterEdgeDragEnabled ? spectrum.getFilterEdgeScreenX() : null;
+            if (edgePixels) {
+                const distLow = Math.abs(e.offsetX - edgePixels.xLow);
+                const distHigh = Math.abs(e.offsetX - edgePixels.xHigh);
+                // Grab whichever edge is closest, as long as it's within the hit tolerance.
+                // This lets the low edge be grabbed even when it sits very near the carrier.
+                if (Math.min(distLow, distHigh) <= FILTER_EDGE_HIT_PX) {
+                    spectrum._filterDragEdge = (distLow <= distHigh) ? 'low' : 'high';
+                    spectrum.canvas.style.cursor = 'ew-resize';
+                    e.preventDefault();
+                    return;
+                }
+            }
             leftDown = true;
             leftDragStarted = false;
             leftStartX = e.offsetX;
@@ -280,8 +286,58 @@ function Spectrum(id, options) {
         e.preventDefault();
     });
 
+    // Hover feedback: show a resize cursor when over a filter edge (not while dragging)
+    this.canvas.addEventListener('mousemove', function(e) {
+        if (leftDown || isDragging || spectrum._filterDragEdge) return;
+        const edgePixels = window.filterEdgeDragEnabled ? spectrum.getFilterEdgeScreenX() : null;
+        if (!edgePixels) { spectrum.canvas.style.cursor = ""; return; }
+        const distLow = Math.abs(e.offsetX - edgePixels.xLow);
+        const distHigh = Math.abs(e.offsetX - edgePixels.xHigh);
+        spectrum.canvas.style.cursor = (Math.min(distLow, distHigh) <= FILTER_EDGE_HIT_PX) ? "ew-resize" : "";
+    });
+
     window.addEventListener('mousemove', function(e) {
         const rect = spectrum.canvas.getBoundingClientRect();
+        // Dragging a filter edge (low or high) takes priority over spectrum panning
+        if (spectrum._filterDragEdge) {
+            if (!(e.buttons & 1)) { // button released outside the canvas
+                spectrum._filterDragEdge = null;
+                spectrum.canvas.style.cursor = "";
+                return;
+            }
+            const mouseX = e.clientX - rect.left;
+            const hz_per_pixel = spectrum.spanHz / spectrum.canvas.width;
+            const startFreq = spectrum.centerHz - (spectrum.spanHz / 2.0);
+            const freqAtMouse = startFreq + (mouseX * hz_per_pixel);
+            let offsetHz = freqAtMouse - spectrum.frequency;
+            const minGapHz = 20; // keep low/high edges from crossing or collapsing
+            const maxEdgeHz = (Number.isFinite(spectrum.outputSampleRate) && spectrum.outputSampleRate > 0)
+                ? spectrum.outputSampleRate / 2
+                : 6000;
+            offsetHz = Math.max(-maxEdgeHz, Math.min(maxEdgeHz, offsetHz));
+            if (spectrum._filterDragEdge === 'low') {
+                offsetHz = Math.min(offsetHz, spectrum.filter_high - minGapHz);
+                spectrum.filter_low = Math.round(offsetHz);
+            } else {
+                offsetHz = Math.max(offsetHz, spectrum.filter_low + minGapHz);
+                spectrum.filter_high = Math.round(offsetHz);
+            }
+            try {
+                const lowEl = document.getElementById('filterLowInput');
+                const highEl = document.getElementById('filterHighInput');
+                if (lowEl) lowEl.value = spectrum.filter_low;
+                if (highEl) highEl.value = spectrum.filter_high;
+            } catch (err) { /* ignore */ }
+            try {
+                const now = Date.now();
+                if ((now - lastFilterEdgeSend) >= filterEdgeSendInterval) {
+                    lastFilterEdgeSend = now;
+                    if (typeof sendFilterEdges === 'function') sendFilterEdges(false);
+                }
+            } catch (err) { console.warn('Failed to send filter edges during drag', err); }
+            if (spectrum.bin_copy) spectrum.drawSpectrumWaterfall(spectrum.bin_copy, false);
+            return;
+        }
         // Left mouse drag: shift spectrum center
         if (leftDown && (e.buttons & 1)) {
             const mouseX = e.clientX - rect.left;
@@ -389,6 +445,13 @@ function Spectrum(id, options) {
         }
     });
     window.addEventListener('mouseup', function(e) {
+        // Finalize a filter-edge drag: send final edges and bail out before quick-click/pan logic
+        if (spectrum._filterDragEdge && e.button === 0) {
+            try { if (typeof sendFilterEdges === 'function') sendFilterEdges(true); } catch (err) { console.warn('Failed to send final filter edges', err); }
+            spectrum._filterDragEdge = null;
+            spectrum.canvas.style.cursor = "";
+            return;
+        }
         // Left mouse quick click: change tuned frequency
         if (leftDown && e.button === 0) {
             const dragDuration = Date.now() - leftStartTime;
@@ -531,6 +594,20 @@ Spectrum.prototype.setFrequency = function(freq) {
 Spectrum.prototype.setFilter = function(low,high) {
     this.filter_low=low;
     this.filter_high=high;
+}
+
+// Compute the current on-screen pixel x-positions of the filter low/high edges,
+// using the same frequency<->pixel mapping as the mouse-to-frequency handlers.
+Spectrum.prototype.getFilterEdgeScreenX = function() {
+    if (!this.spanHz || !this.canvas || !this.canvas.width) return null;
+    if (typeof this.filter_low !== 'number' || typeof this.filter_high !== 'number') return null;
+    var hz_per_pixel = this.spanHz / this.canvas.width;
+    if (!hz_per_pixel) return null;
+    var startFreq = this.centerHz - (this.spanHz / 2.0);
+    return {
+        xLow: ((this.frequency + this.filter_low) - startFreq) / hz_per_pixel,
+        xHigh: ((this.frequency + this.filter_high) - startFreq) / hz_per_pixel
+    };
 }
 
 
@@ -1667,31 +1744,49 @@ Spectrum.prototype.rangeDecrease = function() {
     this.saveSettings();
 }
 
-Spectrum.prototype.setCenterHz = function(hz) {
-    // Ensure span/center do not exceed hardware limits when input_samprate is known
-    if (typeof this.input_samprate === 'number' && !isNaN(this.input_samprate)) {
-        const nyquist = this.input_samprate / 2;
-        let halfSpan = Math.max(0, this.spanHz / 2);
-        // If requested span is larger than the available sample bandwidth, clamp span
-        if (halfSpan > nyquist) {
-            halfSpan = nyquist;
-            this.spanHz = 2 * nyquist;
-        }
-        const minCenter = halfSpan;
-        const maxCenter = nyquist - halfSpan;
-        if (minCenter > maxCenter) {
-            // Degenerate case: force center to mid-Nyquist
-            hz = nyquist / 2;
-        } else {
-            if (hz < minCenter) hz = minCenter;
-            if (hz > maxCenter) hz = maxCenter;
-        }
+// Front-end RF bounds are absolute: tuners often publish a non-zero first LO
+// and an asymmetric (occasionally entirely negative) IF window.
+Spectrum.prototype.getRfBounds = function() {
+    const lo = this.frontendLoHz;
+    const lowIf = this.frontendLowIfHz;
+    const highIf = this.frontendHighIfHz;
+    if (Number.isFinite(lo) && Number.isFinite(lowIf) &&
+        Number.isFinite(highIf) && highIf > lowIf) {
+        const minHz = lo + lowIf;
+        const maxHz = lo + highIf;
+        if (Number.isFinite(minHz) && Number.isFinite(maxHz) &&
+            minHz >= 0 && maxHz > minHz)
+            return { minHz, maxHz };
     }
-    //console.log("spectrum.setCenterHz: ", hz);
+    // Legacy direct-sampling fallback for backends without FE edge metadata.
+    if (Number.isFinite(this.input_samprate) && this.input_samprate > 0)
+        return { minHz: 0, maxHz: this.input_samprate / 2 };
+    return null;
+};
+
+Spectrum.prototype.checkFrequencyIsValid = function(frequencyRequested) {
+    const bounds = this.getRfBounds();
+    const valid = Number.isFinite(frequencyRequested) && !!bounds &&
+        frequencyRequested >= bounds.minHz && frequencyRequested <= bounds.maxHz;
+    if (!valid) console.warn("Requested frequency is outside RF coverage:",
+                              frequencyRequested, bounds);
+    return valid;
+};
+
+Spectrum.prototype.setCenterHz = function(hz) {
+    const bounds = this.getRfBounds();
+    if (bounds) {
+        const width = bounds.maxHz - bounds.minHz;
+        this.spanHz = Math.max(0, Math.min(Number(this.spanHz) || 0, width));
+        const halfSpan = this.spanHz / 2;
+        const minCenter = bounds.minHz + halfSpan;
+        const maxCenter = bounds.maxHz - halfSpan;
+        hz = Math.min(maxCenter, Math.max(minCenter, hz));
+    }
     this.centerHz = hz;
     this.updateAxes();
     this.saveSettings();
-}
+};
 
 Spectrum.prototype.setSpanHz = function(hz) {
     // Remember previous span and visibility of tuned frequency so we can detect
@@ -1701,25 +1796,18 @@ Spectrum.prototype.setSpanHz = function(hz) {
     const prevEnd = this.centerHz + (prevSpan / 2);
     const wasVisible = (typeof this.frequency === 'number') && (this.frequency >= prevStart && this.frequency <= prevEnd);
 
-    // Clamp span to available sample rate if known, and adjust center if needed
-    if (typeof this.input_samprate === 'number' && !isNaN(this.input_samprate)) {
-        const maxSpan = this.input_samprate; // cannot exceed sample rate
-        if (hz > maxSpan) hz = maxSpan;
-        if (hz < 0) hz = 0;
-    }
+    // Never clamp against RF=0..Nyquist on a tuner: use the actual LO+IF
+    // limits supplied by the backend (or the legacy HF fallback).
+    const bounds = this.getRfBounds();
+    const width = bounds ? bounds.maxHz - bounds.minHz : null;
+    if (Number.isFinite(width))
+        hz = Math.max(0, Math.min(hz, width));
     this.spanHz = hz;
-    // After changing span, ensure current center still yields min/max within limits
-    if (typeof this.input_samprate === 'number' && !isNaN(this.input_samprate)) {
-        const nyquist = this.input_samprate / 2;
-        let halfSpan = Math.max(0, this.spanHz / 2);
-        if (halfSpan > nyquist) {
-            halfSpan = nyquist;
-            this.spanHz = 2 * nyquist;
-        }
-        const minCenter = halfSpan;
-        const maxCenter = nyquist - halfSpan;
-        if (this.centerHz < minCenter) this.centerHz = minCenter;
-        if (this.centerHz > maxCenter) this.centerHz = maxCenter;
+    if (bounds) {
+        const halfSpan = this.spanHz / 2;
+        const minCenter = bounds.minHz + halfSpan;
+        const maxCenter = bounds.maxHz - halfSpan;
+        this.centerHz = Math.min(maxCenter, Math.max(minCenter, this.centerHz));
     }
     // If this was a zoom-in (span shrank) and the tuned frequency was visible
     // before but is now outside the new window, request the backend to center
