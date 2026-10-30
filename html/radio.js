@@ -1637,8 +1637,9 @@ function applyQuickBW() {
                   const maxVal = (typeof zoomTableSize === 'number' && !isNaN(zoomTableSize)) ? (zoomTableSize - 1) : Number(zoomEl.max) || 0;
                   zoomEl.max = maxVal;
                   try { updateZoomMarkers(); } catch (e) {}
-                  // If the frontend sample rate is the lower value (<= 64.8 MHz) disallow zoom level 0
-                  const minVal = (typeof input_samprate === 'number' && input_samprate > 0 && input_samprate <= 64800000) ? 1 : 0;
+                  // Respect the backend zoom table. Sample rate alone does not make
+                  // zoom level 0 invalid; the server determines the actual span.
+                  const minVal = 0;
                   zoomEl.min = minVal;
                   // Clamp incoming server-provided zoom level to the allowed range before showing
                   let clamped = z_level;
@@ -5431,11 +5432,11 @@ function fetchAndDisplayWWVSolarData() {
         bwHz = (typeof binWidthHz === 'number' ? binWidthHz : 1) * (typeof binCount === 'number' ? binCount : 1);
       }
 
-      // If the calculated bandwidth exceeds the system Nyquist (fs/2), clamp to fs/2.
-      // This commonly happens when the slider reaches zoom level 0; the proper displayed
-      // value should not exceed input_samprate/2 and is effectively zoom level 1's fs/2.
-      if (typeof input_samprate === 'number' && input_samprate > 0 && bwHz > (input_samprate / 2)) {
-        bwHz = input_samprate / 2;
+      // A displayed complex/baseband spectrum can span the full sample
+      // rate. Halving it here incorrectly makes the widest zoom levels
+      // appear identical. The backend-reported bin width/count is authoritative.
+      if (typeof input_samprate === 'number' && input_samprate > 0 && bwHz > input_samprate) {
+        bwHz = input_samprate;
       }
 
       // Always format bandwidth in kHz with one decimal digit (e.g. "2.5 kHz")
