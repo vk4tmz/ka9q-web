@@ -752,65 +752,48 @@ static void zoom(struct session *sp, int shift);
 static void adjust_center_within_bounds(struct session *sp);
 static uint32_t allocate_session_ssrc(void);
 static bool session_pair_in_use(uint32_t ssrc);
-/* Define zoom_table type and table so handler can compute size */
-struct zoom_table_t {
-  int bin_width;
-  int bin_count;
-};
+/* Adaptive zoom profile: level 0 is the usable frontend IF width, with
+   successive half-width levels down to a configurable 3 kHz floor. */
+#define ZOOM_BINS 1620
+#define ZOOM_MIN_SPAN_HZ 3000.0
+#define ZOOM_MAX_LEVELS 32
 
-const struct zoom_table_t zoom_table[] = {
-  {40000, 1620},
-  {20000, 1620},
-  // 18790 Hz added: gives 30,439,800 Hz (bin_width * 1620), the closest
-  // achievable step to a direct-sampling HF front end's real coverage
-  // without exceeding it. Measured on an RX888 (Frontend.min_IF=15000,
-  // Frontend.max_IF=30,456,000, a 30,441,000 Hz window, matching its
-  // reported 0.015-30.456 MHz coverage). Without this entry, both
-  // {40000,1620}=64.8MHz and {20000,1620}=32.4MHz exceed that window and
-  // get skipped by zoom_to()'s while loop, which falls through to the
-  // next entry that fits - {10000,1620}=16.2MHz - showing barely half of
-  // HF's real coverage under a "Full Band" request. Same reasoning as the
-  // 5432Hz and 1480Hz entries below: this table has no per-front-end
-  // awareness beyond "pick the widest entry from here that still fits",
-  // so any front end whose real coverage falls between two existing steps
-  // silently loses most of a full-span view.
-  {18790, 1620},
-  {10000, 1620},
-  {8000, 1620},
-  // 5432 Hz added: gives 8,799,840 Hz (bin_width * 1620), the closest
-  // achievable step to the Airspy R2's real-sampling usable window
-  // (confirmed 8.8MHz: max_IF=-600kHz, min_IF=-0.47*20Msps, src/airspy.c)
-  // without exceeding it - same reasoning as the 1480Hz entry below for
-  // VHF's 2.4Msps complex/IQ capture. Without this, the widest achievable
-  // zoom was 5000Hz*1620=8.1MHz, leaving a ~700kHz gap versus what the
-  // hardware actually supports.
-  {5432, 1620},
-  {5000, 1620},
-  {4000, 1620},
-  {2000, 1620},
-  // 1480 Hz added: gives a 2,397,600 Hz span (bin_width * 1620), the
-  // closest achievable step to a full 2.4 Msps complex/IQ capture (e.g. an
-  // RTL-SDR at its usual rate) without exceeding it. The next entry up
-  // (2000 -> 3,240,000 Hz) exceeds it, leaving a gap between 1.62MHz and
-  // "as wide as the hardware actually captures".
-  {1480, 1620},
-  {1000, 1620},
-  {800, 1620},
-  {500, 1620},
-  {400, 1620},
-  {200, 1620},
-  {100, 1620},
-  {80, 1620},
-  {50, 1620},
-  {40, 1620},
-  {20, 1620},
-  {10, 1620},
-  {8, 1620},
-  {5, 1620},
-  {4, 1620},
-  {2, 1620},
-  {1, 1620}
-};
+static void frontend_if_bounds(double *lo_if, double *hi_if);
+
+static double zoom_max_span(void) {
+  double lo, hi;
+  if (Frontend.samprate <= 0)
+    return 1620000.0; /* Safe default before frontend status arrives. */
+  frontend_if_bounds(&lo, &hi);
+  double const span = hi - lo;
+  return (isfinite(span) && span > 0) ? span : (double)Frontend.samprate;
+}
+
+static int zoom_level_count(void) {
+  double span = zoom_max_span();
+  int count = 1;
+  while (span > ZOOM_MIN_SPAN_HZ && count < ZOOM_MAX_LEVELS) {
+    span *= 0.5;
+    count++;
+  }
+  return count;
+}
+
+static void zoom_parameters(int level, int *width, int *count) {
+  int const last = zoom_level_count() - 1;
+  if (level < 0) level = 0;
+  if (level > last) level = last;
+  double const maximum = zoom_max_span();
+  double span = ldexp(maximum, -level);
+  if (level == last && maximum >= ZOOM_MIN_SPAN_HZ)
+    span = ZOOM_MIN_SPAN_HZ;
+  /* Final level uses 1500 x 2 Hz bins for an exact 3 kHz display. */
+  int bins = (span == ZOOM_MIN_SPAN_HZ) ? 1500 : ZOOM_BINS;
+  int bw = (int)floor(span / bins);
+  if (bw < 1) bw = 1;
+  *width = bw;
+  *count = bins;
+}
 
 /* Dispatch a single websocket text message `tmp` for session `sp`.
    Called with `session_mutex` already held. Returns an Onion status. */
@@ -1095,9 +1078,20 @@ static onion_connection_status handle_ws_message(struct session *sp, char *tmp) 
           pthread_mutex_unlock(&sp->spectrum_mutex);
           control_poll(sp);
         } else if (token && strcmp(token, "SIZE") == 0) {
-            int table_size = sizeof(zoom_table) / sizeof(zoom_table[0]);
-            char response[16];
-            snprintf(response, sizeof(response), "ZSIZE:%d", table_size);
+            int const size = zoom_level_count();
+            char profile[1024];
+            size_t used = (size_t)snprintf(profile, sizeof(profile), "ZPROFILE:");
+            for (int level = 0; level < size && used < sizeof(profile); level++) {
+              int width, count;
+              zoom_parameters(level, &width, &count);
+              int n = snprintf(profile + used, sizeof(profile) - used,
+                               "%s%d,%d", level ? ";" : "", width, count);
+              if (n < 0 || (size_t)n >= sizeof(profile) - used) break;
+              used += (size_t)n;
+            }
+            send_ws_text_to_session(sp, profile);
+            char response[32];
+            snprintf(response, sizeof(response), "ZSIZE:%d", size);
             send_ws_text_to_session(sp, response);
         } else {
           char *end_ptr;
@@ -1383,32 +1377,10 @@ static void check_frequency(struct session *sp) {
 }
 
 static void zoom_to(struct session *sp, int level) {
-  const int table_size = sizeof(zoom_table) / sizeof(zoom_table[0]);
-
-  if (level < 0)
-    level = 0;
-
-  if(Frontend.samprate != 0){
-    // Widest usable span is the width of the real valid IF window
-    // (Frontend.max_IF - Frontend.min_IF), not a flat samprate/2 assumption:
-    // that's only correct for a real-sampling front end whose window happens
-    // to be (close to) symmetric - a complex/IQ front end (RTL-SDR) captures
-    // close to the FULL sample rate around the tuned centre, and an
-    // asymmetric real-sampling front end (Airspy: -0.47*samprate to
-    // -600kHz) has a *different* width again. See frontend_if_bounds()
-    // above - this replaces the previous Frontend.isreal-based
-    // approximation with the actual measured window width.
-    double lo_if, hi_if;
-    frontend_if_bounds(&lo_if, &hi_if);
-    double const max_span = hi_if - lo_if;
-    while(zoom_table[level].bin_width * zoom_table[level].bin_count
-	  > max_span && level < table_size)
-      level++;
-    if(level == table_size)
-      level--;
-  }
-  sp->bin_width = zoom_table[level].bin_width;
-  sp->bins = zoom_table[level].bin_count;
+  int const last = zoom_level_count() - 1;
+  if (level < 0) level = 0;
+  if (level > last) level = last;
+  zoom_parameters(level, &sp->bin_width, &sp->bins);
   sp->zoom_index = level;
 }
 
@@ -2113,25 +2085,11 @@ onion_connection_status home(void *data, onion_request * req,
     frontend_if_bounds(&lo_if, &hi_if);
     sp->center_frequency = isnan(Frontend.frequency) ? 0
       : (uint32_t)round(Frontend.frequency + (lo_if + hi_if) / 2.0);
-    const int table_size = sizeof(zoom_table) / sizeof(zoom_table[0]);
-    for(; level < table_size; level++)
-      if(zoom_table[level].bin_width * zoom_table[level].bin_count <= round(hi_if - lo_if))
-        break;
-    if (level >= table_size)
-      level = table_size - 1; /* nothing fit (shouldn't happen) - narrowest, not out of bounds */
+    level = 0;
   } else {
-    /* Frontend.samprate not yet populated - this is the very first
-       session since this process started, before any status packet has
-       arrived. Dividing/indexing against an unknown sample rate would
-       either divide by zero or walk off the end of zoom_table, so fall
-       back to the old fixed default (this is almost certainly why this
-       block was disabled in the first place) until real frontend data
-       exists. */
-    level = 6;
+    level = 0;
   }
-  sp->zoom_index = level;
-  sp->bins=zoom_table[level].bin_count;
-  sp->bin_width=zoom_table[level].bin_width; // width of a pixel in hz
+  zoom_to(sp, level);
   sp->next=NULL;
   sp->previous=NULL;
   sp->shift = NAN;
@@ -3534,16 +3492,7 @@ void *spectrum_thread(void *arg) {
           }
           if (sp->center_frequency == 0) {
             sp->center_frequency = (uint32_t)round(Frontend.frequency + (lo_if + hi_if) / 2.0);
-            const int table_size = sizeof(zoom_table) / sizeof(zoom_table[0]);
-            int level = 0;
-            for(; level < table_size; level++)
-              if(zoom_table[level].bin_width * zoom_table[level].bin_count <= round(hi_if - lo_if))
-                break;
-            if (level >= table_size)
-              level = table_size - 1;
-            sp->zoom_index = level;
-            sp->bins = zoom_table[level].bin_count;
-            sp->bin_width = zoom_table[level].bin_width;
+            zoom_to(sp, 0);
           }
           if (retuned) {
             char freq_msg[64];
