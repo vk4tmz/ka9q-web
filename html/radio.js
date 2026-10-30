@@ -5079,6 +5079,19 @@ function getZoomTableSize() {
     // Temporary event listener for the ZSIZE response
     function handleZoomTableSize(event) {
       try {
+        if (typeof event.data === "string" && event.data.startsWith("ZPROFILE:")) {
+          const entries = event.data.slice("ZPROFILE:".length).split(";").map(function(pair) {
+            const values = pair.split(",").map(Number);
+            return { bin_width: values[0], bin_count: values[1] };
+          });
+          if (entries.length > 0 && entries.every(function(e) {
+            return Number.isFinite(e.bin_width) && e.bin_width > 0 &&
+                   Number.isFinite(e.bin_count) && e.bin_count > 0;
+          })) {
+            window.zoomTable = entries; // Backend profile is authoritative.
+          }
+          return;
+        }
         if (typeof event.data === "string" && event.data.startsWith("ZSIZE:")) {
           const size = parseInt(event.data.split(":")[1], 10);
           ws.removeEventListener("message", handleZoomTableSize);
