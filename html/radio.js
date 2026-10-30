@@ -5800,15 +5800,16 @@ function fetchAndDisplayWWVSolarData() {
       const table = window.zoomTable || [];
       const entry = table[idx] || table[Math.min(idx, table.length-1)] || null;
       let bwHz = 0;
-      // Prefer runtime `binWidthHz * binCount` which is provided by the server
-      // and represents the actual per-bin width and FFT size. If not available,
-      // fall back to the zoom table's nominal entry span.
-      if (typeof binWidthHz === 'number' && binWidthHz > 0 && typeof binCount === 'number' && binCount > 0) {
+      // The popup describes the slider position being selected, not the
+      // previous spectrum frame (which can arrive before the zoom command
+      // has taken effect). ZPROFILE is supplied by the backend and gives
+      // the exact bin geometry for each index.
+      if (entry && Number.isFinite(entry.bin_width) && entry.bin_width > 0 &&
+          Number.isFinite(entry.bin_count) && entry.bin_count > 0) {
+        bwHz = entry.bin_width * entry.bin_count;
+      } else if (typeof binWidthHz === 'number' && binWidthHz > 0 &&
+                 typeof binCount === 'number' && binCount > 0) {
         bwHz = binWidthHz * binCount;
-      } else if (entry && typeof entry.bin_width === 'number' && typeof entry.bin_count === 'number') {
-        bwHz = (entry.bin_width * entry.bin_count);
-      } else {
-        bwHz = (typeof binWidthHz === 'number' ? binWidthHz : 1) * (typeof binCount === 'number' ? binCount : 1);
       }
 
       // A complex/baseband spectrum can span the full sample rate.
