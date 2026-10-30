@@ -3503,6 +3503,23 @@ void *spectrum_thread(void *arg) {
       }
       pthread_mutex_unlock(&session_mutex);
     }
+    /* Frontend status may arrive after this session was created, or change
+       when radiod is restarted at a different ADC rate. The zoom index is
+       not sufficient to describe the actual spectrum request: its bin width
+       and bin count may still belong to the bootstrap fallback profile.
+       Reconcile the active bin geometry with the current frontend on each
+       polling cycle, preserving both the selected zoom index and tuning.
+       No action is taken for unchanged geometry. */
+    if (Frontend.samprate > 0 && isfinite(Frontend.frequency)) {
+      int expected_width, expected_count;
+      zoom_parameters(sp->zoom_index, &expected_width, &expected_count);
+      if (sp->bin_width != expected_width || sp->bins != expected_count) {
+        pthread_mutex_lock(&sp->spectrum_mutex);
+        zoom_to(sp, sp->zoom_index);
+        adjust_center_within_bounds(sp);
+        pthread_mutex_unlock(&sp->spectrum_mutex);
+      }
+    }
     int const demod = preferred_spectrum_demod();
     /* Unconditionally re-assert the full channel spec every cycle rather
        than trusting a keep-alive to survive between polls. Where radiod
