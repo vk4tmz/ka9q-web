@@ -553,7 +553,19 @@
         const active = () => epoch === startupFrequencyEpoch &&
                              ws && ws.readyState === WebSocket.OPEN;
         const zoomEl = document.getElementById('zoom_level');
-        const zoom = zoomEl && zoomEl.value ? zoomEl.value : (target_zoom_level || 6);
+        // For a tuner-based VHF/UHF frontend, start with its full available
+        // spectrum rather than an old HF zoom level restored from localStorage.
+        // Do this only after valid LO/IF metadata establishes the RF range.
+        const vhfFrontend = Number.isFinite(chosen.lowHz) &&
+          Number.isFinite(chosen.highHz) &&
+          chosen.lowHz >= 30000000 && chosen.highHz > chosen.lowHz;
+        const zoom = vhfFrontend ? 0 :
+          (zoomEl && zoomEl.value !== '' ? Number(zoomEl.value) : target_zoom_level);
+        if (vhfFrontend) {
+          target_zoom_level = 0;
+          if (zoomEl) zoomEl.value = '0';
+          try { localStorage.setItem('zoom_level', '0'); } catch (_) {}
+        }
         setTimeout(() => { if (active()) sendControl('zoom', 'Z:' + String(zoom), undefined, true); }, 40);
         setTimeout(() => { if (active()) sendControl('zoom_center', 'Z:c:' + khz, undefined, true); }, 100);
         setTimeout(() => { if (active()) sendControl('freq', 'F:' + khz, undefined, true); }, 160);
